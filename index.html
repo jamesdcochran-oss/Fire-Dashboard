@@ -1,0 +1,76 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>🔥 Five Forks Fire Weather Dashboard (Live)</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    body.dark {
+      background-color: #111827;
+      color: white;
+    }
+    body.dark .card {
+      background-color: #1f2937;
+      color: white;
+    }
+    header {
+      background: #2563eb;
+      color: white;
+      padding: 1em;
+      text-align: center;
+      font-size: 1.5em;
+      position: relative;
+    }
+    #themeToggle, #refreshNow {
+      position: absolute;
+      top: 1em;
+      background: transparent;
+      border: none;
+      font-size: 1em;
+      color: white;
+      cursor: pointer;
+    }
+    #themeToggle {
+      right: 1em;
+    }
+    #refreshNow {
+      left: 1em;
+    }
+  </style>
+</head>
+<body>
+  <header id="top-bar">
+    🔥 Five Forks Fire Weather Dashboard
+    <button id="refreshNow" title="Refresh Now">🔄</button>
+    <button id="themeToggle" title="Toggle Theme">🌓</button>
+  </header>
+  <div id="cards"></div>
+  <div class="map-container"><div id="map"></div></div>
+  <footer>Live data from NWS & FIRMS · Auto-refresh every hour</footer>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+  <script src="main.js"></script>
+  <script>
+    document.getElementById("themeToggle").addEventListener("click", () => {
+      document.body.classList.toggle("dark");
+      localStorage.setItem("theme", document.body.classList.contains("dark") ? "dark" : "light");
+    });
+
+    if (localStorage.getItem("theme") === "dark") {
+      document.body.classList.add("dark");
+    }
+
+    document.getElementById("refreshNow").addEventListener("click", () => {
+      if (typeof refreshData === 'function') {
+        refreshData();
+      } else {
+        alert("Refresh function not found.");
+      }
+    });
+  </script>
+</body>
+</html>
