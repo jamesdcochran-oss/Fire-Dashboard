@@ -1,0 +1,63 @@
+{
+  "name": "Fetch VA Fire Danger Ratings",
+  "nodes": [
+    {
+      "parameters": {
+        "url": "https://dof.virginia.gov/wildland-prescribed-fire/fire-danger/daily-fire-danger-rating/",
+        "responseFormat": "string"
+      },
+      "id": "HTTP_Request",
+      "name": "Fetch DOF Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Simulate parsed fire danger values\nreturn [{\n  json: {\n    wakefield: { level: 1, label: \"LOW\" },\n    farmville: { level: 2, label: \"MODERATE\" },\n    updated: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "Function_Parser",
+      "name": "Parse Fire Levels",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "path": "fire-danger",
+        "options": {}
+      },
+      "id": "Webhook_Out",
+      "name": "Public JSON Endpoint",
+      "type": "n8n-nodes-base.httpResponse",
+      "typeVersion": 1,
+      "position": [
+        720,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Fetch DOF Page": {
+      "main": [
+        [
+          "Function_Parser"
+        ]
+      ]
+    },
+    "Function_Parser": {
+      "main": [
+        [
+          "Public JSON Endpoint"
+        ]
+      ]
+    }
+  },
+  "active": false
+}
