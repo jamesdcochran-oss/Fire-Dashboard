@@ -8,6 +8,159 @@
   <!-- Leaflet CSS/JS (CDN) -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+  <!-- Turf (CDN) for proximity checks -->
+  <script src="https://unpkg.com/@turf/turf@6/turf.min.js" defer></script>
+
+  <style>
+    :root { --bg:#0f172a; --text:#e5e7eb; --card:#111827; --border:#334155; --brand:#3b82f6; --muted:#9ca3af }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--text)}
+    header{background:var(--brand);color:#fff;padding:.75rem 1rem;display:flex;justify-content:space-between;align-items:center;gap:.5rem;flex-wrap:wrap}
+    h1{margin:0;font-size:1.05rem}
+    .menu{display:flex;gap:.5rem;flex-wrap:wrap}
+    .btn,.menu a,select.btn{background:#fff;color:#111;border:1px solid #e5e7eb;padding:.35rem .6rem;border-radius:9999px;text-decoration:none;font-size:.85rem;cursor:pointer}
+    .btn[disabled]{opacity:.6;cursor:progress}
+    main{display:grid;gap:1rem;padding:1rem}
+    .cards{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:.9rem;box-shadow:0 1px 4px rgba(0,0,0,.25)}
+    .meta{font-size:.8rem;color:var(--muted);text-align:right}
+    .map-wrap{height:520px;border-radius:14px;overflow:hidden;border:1px solid var(--border)}
+    footer{color:var(--muted);text-align:center;padding:1rem}
+    .pill{display:inline-flex;align-items:center;gap:.35rem;padding:.25rem .5rem;border-radius:9999px;border:1px solid var(--border);background:#fff;color:#111;font-size:.75rem}
+    .ok{color:#10b981;border-color:#10b981}.warn{color:#f59e0b;border-color:#f59e0b}.err{color:#ef4444;border-color:#ef4444}
+    .flags{display:flex;gap:.35rem;flex-wrap:wrap;margin-top:.35rem}
+    .flag{font-weight:700;font-size:.8rem}
+    .flash{color:#ef4444;animation:flash 1s steps(2,end) infinite}
+    @keyframes flash{50%{opacity:.2}}
+    .legend{font-size:.8rem;color:var(--muted)}
+    .legend code{background:#0b1225;border:1px solid var(--border);border-radius:6px;padding:.1rem .3rem;color:#e5e7eb}
+    details summary{cursor:pointer}
+    .leaflet-container{height:100%;width:100%}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🔥 Five Forks Fire Weather</h1>
+    <nav class="menu" aria-label="Primary">
+      <button id="unitBtn" class="btn" title="Toggle °F/°C">°F</button>
+      <button id="refreshBtn" class="btn" title="Refresh">🔄 Refresh</button>
+      <label for="radiusSel" class="btn" title="Hotspot radius (km)" style="display:inline-flex;gap:.4rem;align-items:center">
+        Radius
+        <select id="radiusSel" class="btn" style="margin-left:.25rem">
+          <option value="20">20 km</option>
+          <option value="30">30 km</option>
+          <option value="40">40 km</option>
+        </select>
+      </label>
+      <span id="statusPill" class="pill" style="display:none">—</span>
+      <a href="https://www.weather.gov/akq/" target="_blank" rel="noopener">AKQ</a>
+      <a href="https://www.weather.gov/akq/FIREMAIN" target="_blank" rel="noopener">AKQ Fire</a>
+      <a href="https://fs-prod-nwcg.s3.us-gov-west-1.amazonaws.com/s3fs-public/publication/pms461.pdf" target="_blank" rel="noopener">IRPG</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="legend">
+      <details>
+        <summary>ℹ️ Fire weather rules used here</summary>
+        <div style="margin-top:.4rem">
+          <div><strong>30/30/30 rule</strong>: higher danger when <code>T ≥ 30°C (86°F)</code>, <code>RH ≤ 30%</code>, and <code>Wind ≥ 30 km/h (~18 mph)</code>.</div>
+          <div><strong>Crossover</strong>: when <code>Temperature (°F) ≥ Relative Humidity (%)</code>.</div>
+          <div>We flag <strong>NEAR</strong> if values are within ~10% (e.g., T ≥ 28°C, RH ≤ 33%, Wind ≥ 16 mph) or 5°F for crossover.</div>
+        </div>
+      </details>
+    </div>
+
+    <div id="updated" class="meta">Last updated: —</div>
+    <section id="cards" class="cards" aria-live="polite" aria-busy="false"></section>
+    <section class="map-wrap" aria-label="Active wildfire hotspots map"><div id="map" style="height:100%"></div></section>
+  </main>
+
+  <footer>Data: NOAA & NASA FIRMS • Updates hourly</footer>
+
+  <script>
+    // ---- Config ----
+    const COUNTIES = [
+      { name: "Amelia",        lat: 37.342, lon: -77.980 },
+      { name: "Nottoway",      lat: 37.142, lon: -78.089 },
+      { name: "Dinwiddie",     lat: 37.077, lon: -77.587 },
+      { name: "Prince George", lat: 37.221, lon: -77.288 },
+      { name: "Brunswick",     lat: 36.758, lon: -77.847 },
+      { name: "Greensville",   lat: 36.686, lon: -77.542 }
+    ];
+    const FIRMS_SOURCES = [
+      // VIIRS NOAA-20/21 (NRT) 24h + MODIS C6.1 24h
+      'https://firms.modaps.eosdis.nasa.gov/active_fire/viirs/geojson/VIIRS_I_NRT_USA_contiguous_and_Hawaii_24h.geojson',
+      'https://firms.modaps.eosdis.nasa.gov/active_fire/c6.1/geojson/MODIS_C6_1_USA_contiguous_and_Hawaii_24h.geojson'
+    ];
+
+    // ---- State ----
+    let unit = localStorage.getItem('ff:unit') || 'F';
+    let radiusKm = parseInt(localStorage.getItem('ff:radius') || '30', 10);
+    let lastSuccessAt = 0;
+    let currentCtrl = null; // AbortController for in-flight refresh
+    const hourlyUrlCache = new Map(); // cache NOAA forecastHourly URL per lat,lon
+
+    // ---- Helpers ----
+    const $ = sel => document.querySelector(sel);
+    function fmtStamp(d=new Date()){ return d.toLocaleString(undefined,{hour12:true}); }
+    const toC = f => Math.round(((f-32)*5)/9);
+    function setStatus(text, cls){
+      const pill = $('#statusPill');
+      if(!pill) return;
+      pill.className = 'pill ' + (cls||'');
+      pill.textContent = text;
+      // Hide when Fresh (green tab removed)
+      if(cls==='ok' || text==='Fresh'){ pill.style.display='none'; } else { pill.style.display=''; }
+    }
+    async function fetchJSON(url, { signal, headers } = {}){
+      const res = await fetch(url, { signal, headers });
+      if(!res.ok) throw new Error('HTTP '+res.status+' for '+url);
+      return res.json();
+    }
+    function el(tag, attrs={}, ...children){
+      const node = document.createElement(tag);
+      for(const [k,v] of Object.entries(attrs||{})){
+        if(k === 'class') node.className = v; else if(k === 'text') node.textContent = v; else node.setAttribute(k, v);
+      }
+      for(const c of children){ if(typeof c === 'string') node.appendChild(document.createTextNode(c)); else if(c) node.appendChild(c); }
+      return node;
+    }
+    // Magnus dew point (°C)
+    function dewPointC(tempC, rh){
+      if(!Number.isFinite(tempC) || !Number.isFinite(rh) || rh<=0 || rh>100) return null;
+      const a=17.625, b=243.04;
+      const alpha = Math.log(rh/100) + (a*tempC)/(b+tempC);
+      return (b*alpha)/(a - alpha);
+    }
+    // Parse NOAA wind string to mph (take the max number seen)
+    function parseWindMph(s){
+      if(!s || typeof s !== 'string') return null;
+      const nums = (s.match(/\d+/g) || []).map(n=>parseInt(n,10));
+      if(!nums.length) return null;
+      return Math.max(...nums); // assume mph
+    }
+    function flags303030(tempF, rh, windStr){
+      const tempC = (tempF!=null)? (tempF-32)*5/9 : null;
+      const windMph = parseWindMph(windStr);
+      const within = (tempC!=null && rh!=null && windMph!=null)
+        && tempC >= 30 && rh <= 30 && windMph >= 18; // 30 km/h ≈ 18.6 mph
+      const near = !within && (
+        ((tempC!=null && tempC >= 28) ? 1:0) + ((rh!=null && rh <= 33)?1:0) + ((windMph!=null && windMph >= 16)?1:0)
+      ) >= 2;
+      return { within, near };
+    }
+    function flagsCrossover(tempF, rh){
+      if(tempF==null || rh==null) retur<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>🔥 Five Forks Fire Weather</title>
+
+  <!-- Leaflet CSS/JS (CDN) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
   <!-- Turf (CDN) -->
   <script src="https://unpkg.com/@turf/turf@6/turf.min.js" defer></script>
 
