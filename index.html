@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Five Forks Fire Dashboard</title>
+
+  <!-- Leaflet (CDN) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+
+  <style>
+    :root{--bg:#0b1220;--text:#e5e7eb;--card:#0f172a;--border:#23304a;--brand:#2563eb;--muted:#9ca3af}
+    [data-theme='light']{--bg:#f8fafc;--text:#0f172a;--card:#ffffff;--border:#e2e8f0;--brand:#2563eb;--muted:#64748b}
+    *{box-sizing:border-box} body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,Helvetica Neue,Arial;background:var(--bg);color:var(--text)}
+    header{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;gap:.5rem;padding:.75rem 1rem;background:#1e53c7;color:#fff}
+    h1{margin:0;font-size:1rem}
+    .btn{appearance:none;border:1px solid var(--border);border-radius:9999px;padding:.35rem .6rem;background:#fff;color:#0f172a;cursor:pointer}
+    main{max-width:900px;margin:0 auto;padding:1rem;display:grid;gap:1rem}
+    .grid{display:grid;gap:.75rem;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:.9rem}
+    .card h3{margin:.1rem 0 .6rem}.muted{color:var(--muted)}
+    .map{height:420px;border:1px solid var(--border);border-radius:14px;overflow:hidden}
+    /* lighter dark map */
+    [data-theme='dark'] .leaflet-tile{ filter: brightness(1.35) contrast(1.05) saturate(1.12); }
+  </style>
+</head>
+<body>
+  <header>
+    <div style="display:flex;align-items:center;gap:.6rem">
+      <div style="height:32px;width:32px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:#fff;color:var(--brand);font-weight:700;">🔥</div>
+      <div><div style="font-size:.65rem;opacity:.85;letter-spacing:.06em">Five Forks</div><h1>Fire Dashboard</h1></div>
+    </div>
+    <div style="display:flex;gap:.5rem;align-items:center">
+      <button id="themeBtn" class="btn" title="Toggle theme">🌓 Theme</button>
+      <button id="refreshBtn" class="btn" title="Refresh">🔄 Refresh</button>
+      <a class="btn" href="https://fire.airnow.gov/#9/37.131/-77.585" target="_blank" rel="noopener">AirNow</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="card">
+      <h3>Counties — 24h FIRMS hotspots (within 25 km)</h3>
+      <div id="when" class="muted">Loading…</div>
+      <div id="list" class="grid"></div>
+    </section>
+
+    <section class="card">
+      <h3>Map — NASA FIRMS (click map to open FIRMS at that point)</h3>
+      <div id="map" class="map"></div>
+    </section>
+
+    <section class="card">
+      <h3>Quick Links</h3>
+      <div class="grid">
+        <a class="btn" href="https://firms.modaps.eosdis.nasa.gov/map/#@-77.585,37.131,10z" target="_blank" rel="noopener">NASA FIRMS Viewer</a>
+        <a class="btn" href="https://fire.airnow.gov/#9/37.131/-77.585" target="_blank" rel="noopener">AirNow Fire Map</a>
+        <a class="btn" href="https://spot.nws.noaa.gov/" target="_blank" rel="noopener">NWS Spot Forecast</a>
+      </div>
+    </section>
+  </main>
+
+<script>
+  // ---- Config ----
+  const COUNTIES=[
+    { name:"Amelia", lat:37.342, lon:-77.980 },
+    { name:"Nottoway", lat:37.142, lon:-78.089 },
+    { name:"Dinwiddie", lat:37.077, lon:-77.587 },
+    { name:"Prince George", lat:37.221, lon:-77.288 },
+    { name:"Brunswick", lat:36.758, lon:-77.847 },
+    { name:"Greensville", lat:36.686, lon:-77.542 }
+  ];
+  const R_KM = 25;
+  const BBOX = [-78.5,36.4,-77.0,37.7]; // minLon,minLat,maxLon,maxLat
+  const FIRMS_URL = "https://firms.modaps.eosdis.nasa.gov/active_fire/c6.1/geojson/MODIS_C6_1_USA_contiguous_and_Hawaii_24h.geojson";
+
+  // ---- Helpers ----
+  const $ = s => document.querySelector(s);
+  const fmt = () => new Date().toLocaleString();
+  const hav = (a,b,c,d)=>{const R=6371,toR=x=>x*Math.PI/180;const dLa=toR(c-a),dLo=toR(d-b);
+    const A=Math.sin(dLa/2)**2+Math.cos(toR(a))*Math.cos(toR(c))*Math.sin(dLo/2)**2;return 2*R*Math.asin(Math.sqrt(A))};
+
+  // ---- Map first (so you see something even if data fails) ----
+  let map, light, dark, firmsLayer;
+  function initMap(){
+    map = L.map('map').setView([37.131,-77.585], 8);
+    light = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors'});
+    dark  = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'© OpenStreetMap contributors, © CARTO'});
+    document.documentElement.dataset.theme = 'light';
+    light.addTo(map);
+
+    map.on('click', e => {
+      const z = Math.max(3, Math.min(13, Math.round(map.getZoom())));
+      const url = `https://firms.modaps.eosdis.nasa.gov/map/#@${e.latlng.lng.toFixed(3)},${e.latlng.lat.toFixed(3)},${z}z`;
+      window.open(url, '_blank', 'noopener');
+    });
+  }
+  function setMapTheme(){
+    const isLight = document.documentElement.dataset.theme === 'light';
+    if(isLight){ if(map.hasLayer(dark)) map.removeLayer(dark); if(!map.hasLayer(light)) light.addTo(map); }
+    else       { if(map.hasLayer(light)) map.removeLayer(light); if(!map.hasLayer(dark)) dark.addTo(map); }
+  }
+  function toggleTheme(){
+    const isLight = document.documentElement.dataset.theme === 'light';
+    document.documentElement.dataset.theme = isLight ? 'dark' : 'light';
+    setMapTheme();
+  }
+
+  // ---- UI renderers ----
+  function renderList(points){
+    const host = $("#list"); host.innerHTML = "";
+    COUNTIES.forEach(c=>{
+      let n=0; for(const p of points){ if(hav(c.lat,c.lon,p.lat,p.lon) <= R_KM) n++; }
+      const el=document.createElement('div'); el.className='card';
+      el.innerHTML=`<h3>${c.name}</h3><div class="muted">🔥 ${n} hotspots within ${R_KM} km</div>`;
+      host.appendChild(el);
+    });
+  }
+  function renderPoints(points){
+    if(firmsLayer){ firmsLayer.remove(); firmsLayer=null; }
+    const fc={ type:'FeatureCollection', features: points.map(p=>({ type:'Feature', geometry:{ type:'Point', coordinates:[p.lon,p.lat] } })) };
+    firmsLayer=L.geoJSON(fc,{ pointToLayer:(_,latlng)=> L.circleMarker(latlng,{radius:6,color:'#f59e0b',fillColor:'#f59e0b',fillOpacity:.9,weight:1}) }).addTo(map);
+  }
+
+  // ---- Data ----
+  async function fetchFirms(){
+    try{
+      const r = await fetch(FIRMS_URL); if(!r.ok) throw new Error('HTTP '+r.status);
+      const g = await r.json(); const pts=[];
+      for(const f of g.features||[]){
+        if(!f || !f.geometry || f.geometry.type!=='Point') continue;
+        const [lon,lat] = f.geometry.coordinates||[];
+        if(lon>=BBOX[0] && lon<=BBOX[2] && lat>=BBOX[1] && lat<=BBOX[3]) pts.push({lat,lon});
+      }
+      return pts;
+    }catch(e){ console.warn('FIRMS error',e); return []; }
+  }
+
+  async function run(){
+    $("#when").textContent = "Updating…";
+    const pts = await fetchFirms();
+    $("#when").textContent = "Last updated: " + fmt();
+    renderList(pts);
+    renderPoints(pts);
+  }
+
+  // ---- Boot ----
+  window.addEventListener('DOMContentLoaded', ()=>{
+    initMap();
+    $("#themeBtn").addEventListener('click', toggleTheme);
+    $("#refreshBtn").addEventListener('click', run);
+    run();
+  });
+</script>
+</body>
+</html>
