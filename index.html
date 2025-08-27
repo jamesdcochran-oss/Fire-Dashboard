@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Five Forks Fire — SAFE Build</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+  <style>
+    :root{--bg:#0b1220;--text:#e5e7eb;--card:#0f172a;--border:#23304a;--brand:#2563eb;--muted:#9ca3af;--ok:#10b981;--warn:#f59e0b;--err:#ef4444}
+    [data-theme='light']{--bg:#f8fafc;--text:#0f172a;--card:#fff;--border:#e2e8f0;--brand:#2563eb;--muted:#64748b}
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0;font:16px system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,Helvetica Neue,Arial;background:var(--bg);color:var(--text);padding-bottom:env(safe-area-inset-bottom,0)}
+
+    header{position:sticky;top:0;z-index:20;display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;padding:calc(.6rem + env(safe-area-inset-top,0)) 1rem .6rem;background:#1e53c7;color:#fff}
+    h1{margin:0;font-size:1rem}
+    .btn{appearance:none;border:1px solid var(--border);border-radius:9999px;padding:.35rem .6rem;background:#fff;color:#0f172a;cursor:pointer}
+    .toolbar{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
+
+    .diag{position:sticky;top:56px;z-index:19;background:var(--card);border:1px solid var(--border);border-left:0;border-right:0;padding:.5rem 1rem;display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
+    .pill{display:inline-flex;align-items:center;gap:.35rem;padding:.2rem .5rem;border-radius:9999px;border:1px solid var(--border);background:#fff;color:#0f172a;font-size:.75rem}
+    .pill.ok{background:rgba(16,185,129,.12);color:#10b981;border-color:rgba(16,185,129,.3)}
+    .pill.err{background:rgba(239,68,68,.12);color:#ef4444;border-color:rgba(239,68,68,.3)}
+    .pill.warn{background:rgba(245,158,11,.12);color:#f59e0b;border-color:rgba(245,158,11,.3)}
+
+    main{max-width:940px;margin:0 auto;padding:1rem;display:grid;gap:1rem}
+    .grid{display:grid;gap:.75rem;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:.9rem}
+    .card h3{margin:.1rem 0 .6rem}.muted{color:var(--muted)}
+    .map{height:420px;border:1px solid var(--border);border-radius:14px;overflow:hidden}
+    .links{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem}
+    .link{display:block;text-align:center;padding:.7rem .8rem;border:1px solid var(--border);border-radius:12px;color:var(--text);text-decoration:none;background:rgba(255,255,255,.04)}
+
+    /* Dark-map readability with extra-bright option */
+    [data-theme='dark'] .leaflet-container{ background:#0f172a }
+    [data-theme='dark']:not([data-mapbright='1']) .leaflet-tile{ filter: brightness(1.35) contrast(1.05) saturate(1.12) }
+    [data-theme='dark'][data-mapbright='1'] .leaflet-tile{ filter: brightness(1.7) contrast(1.1) saturate(1.2) }
+  </style>
+</head>
+<body>
+  <header>
+    <div style="display:flex;align-items:center;gap:.6rem">
+      <div style="height:32px;width:32px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:#fff;color:#1e53c7;font-weight:700;">🔥</div>
+      <div>
+        <div style="font-size:.65rem;opacity:.85;letter-spacing:.06em">Five Forks</div>
+        <h1>Fire Dashboard — SAFE</h1>
+      </div>
+    </div>
+    <div class="toolbar">
+      <button id="themeBtn" class="btn" title="Toggle page theme">🌓 Theme</button>
+      <button id="mapBrightBtn" class="btn" title="Brighten dark map">🗺️ Map Bright</button>
+      <button id="refreshBtn" class="btn" title="Load/Reload data">⚡ Load Data</button>
+      <a class="btn" href="https://firms.modaps.eosdis.nasa.gov/map/#@-77.585,37.131,10z" target="_blank" rel="noopener">Open FIRMS</a>
+    </div>
+  </header>
+
+  <div class="diag" id="diag">
+    <span class="pill ok" id="b_html">HTML</span>
+    <span class="pill ok" id="b_js">JS</span>
+    <span class="pill" id="b_leaflet">Leaflet</span>
+    <span class="pill" id="b_map">Map</span>
+    <span class="pill" id="b_firms">FIRMS</span>
+    <span class="pill" id="b_noaa">NOAA</span>
+    <span class="muted" id="updated">—</span>
+  </div>
+
+  <main>
+    <section class="card">
+      <h3>Counties — Temp / RH / Wind + Dew Point · 30/30/30 & Crossover</h3>
+      <div id="list" class="grid" style="margin-top:.6rem"></div>
+    </section>
+
+    <section class="card">
+      <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+        <h3 style="margin:0">Map — FIRMS last 12h (click → FIRMS)</h3>
+        <span class="muted">● hotspot</span>
+      </div>
+      <div id="map" class="map"></div>
+      <details class="muted" id="errorsBox" style="margin-top:.5rem;display:none"><summary>Errors</summary><pre id="errors" style="white-space:pre-wrap"></pre></details>
+    </section>
+
+    <section class="card">
+      <h3>Quick Links</h3>
+      <div class="links">
+        <a class="link" href="https://www.weather.gov/akq/" target="_blank" rel="noopener">NWS AKQ</a>
+        <a class="link" href="https://fire.airnow.gov/#9/37.131/-77.585" target="_blank" rel="noopener">AirNow Fire Map</a>
+      </div>
+    </section>
+  </main>
+
+<script>
+  // ===== CONFIG =====
+  const COUNTIES=[
+    { name:"Amelia", lat:37.342, lon:-77.980 },
+    { name:"Nottoway", lat:37.142, lon:-78.089 },
+    { name:"Dinwiddie", lat:37.077, lon:-77.587 },
+    { name:"Prince George", lat:37.221, lon:-77.288 },
+    { name:"Brunswick", lat:36.758, lon:-77.847 },
+    { name:"Greensville", lat:36.686, lon:-77.542 }
+  ];
+  const RADIUS_KM=25;
+  const BBOX=[-78.5,36.4,-77.0,37.7];
+  const FIRMS_MODIS_24H='https://firms.modaps.eosdis.nasa.gov/active_fire/c6.1/geojson/MODIS_C6_1_USA_contiguous_and_Hawaii_24h.geojson';
+  const FIRMS_WINDOW_HOURS=12; // filter to last 12h
+
+  // 30/30/30 thresholds (US units)
+  const THRESH={ tempF:86, rh:30, windMph:19 }; // 30°C≈86°F, 30%, 30 km/h≈19 mph
+  const NEAR={ tempF:84, rh:33, windMph:17 };
+
+  // ===== STATE =====
+  let map, baseLight, baseDark, firmsLayer; let lastSuccessAt=0; const ERR=[];
+
+  // ===== UTILS =====
+  const $=s=>document.querySelector(s);
+  const fmt=()=>new Date().toLocaleString();
+  const set=(k,v)=>{try{localStorage.setItem(k,v)}catch{}}; const get=k=>{try{return localStorage.getItem(k)}catch{return null}};
+  const hav=(a,b,c,d)=>{const R=6371,toR=x=>x*Math.PI/180;const dLat=toR(c-a),dLon=toR(d-b);const A=Math.sin(dLat/2)**2+Math.cos(toR(a))*Math.cos(toR(c))*Math.sin(dLon/2)**2;return 2*R*Math.asin(Math.sqrt(A))};
+  function withTimeout(ms=15000){ const ctrl=new AbortController(); const t=setTimeout(()=>ctrl.abort(),ms); const exec=(input,init={})=>fetch(input,{...init,signal:ctrl.signal}).finally(()=>clearTimeout(t)); return {exec}; }
+  async function fetchJSON(url, options={}, timeoutMs=15000){ const ft=withTimeout(timeoutMs); const res=await ft.exec(url,options); if(!res.ok){ const err=new Error('HTTP '+res.status+' for '+url); err.status=res.status; throw err;} return res.json(); }
+  function parseWindMph(s){ if(!s) return null; const ns=String(s).split(/[^0-9]+/).map(n=>parseInt(n,10)).filter(Number.isFinite); return ns.length? Math.max(...ns): null; }
+  function dewPointF(tempF, rh){ if(tempF==null||!Number.isFinite(tempF)||rh==null||!Number.isFinite(rh)) return null; const tC=(tempF-32)*5/9; const a=17.625,b=243.04; const g=Math.log(rh/100)+(a*tC)/(b+tC); const dpC=(b*g)/(a-g); return Math.round(dpC*9/5+32); }
+  function setBadge(id, state, text){ const el=$(id); if(!el) return; el.classList.remove('ok','err','warn'); if(state==='ok') el.classList.add('ok'); if(state==='err') el.classList.add('err'); if(state==='warn') el.classList.add('warn'); el.textContent=text; }
+  function logErr(label,e){ const msg=`${label}: ${e?.message||e}`; ERR.push(msg); const box=$('#errorsBox'); box.style.display='block'; $('#errors').textContent=ERR.join('\n'); }
+
+  // ===== NOAA =====
+  async function fetchWeather(lat, lon, allowRetry=true){
+    const headers={ 'Accept':'application/geo+json' };
+    try{
+      const meta=await fetchJSON(`https://api.weather.gov/points/${lat},${lon}`,{ headers });
+      const hourly=meta?.properties?.forecastHourly; if(!hourly) throw Object.assign(new Error('No hourly URL'),{status:500});
+      const data=await fetchJSON(hourly,{ headers });
+      const p=data?.properties?.periods?.[0]; if(!p) return null;
+      const tempF=Number.isFinite(p.temperature)?p.temperature:null;
+      const rhRaw=p?.relativeHumidity?.value; const rh=Number.isFinite(rhRaw)?Math.round(rhRaw):null;
+      const wind=[p.windSpeed||'',p.windDirection||''].filter(Boolean).join(' ');
+      return { tempF, rh, wind, windMph:parseWindMph(p.windSpeed), short:p.shortForecast||'—', dewF:dewPointF(tempF,rh) };
+    }catch(err){ if(err && err.status===429 && allowRetry){ await new Promise(r=>setTimeout(r,400+Math.random()*800)); return fetchWeather(lat,lon,false);} throw err; }
+  }
+
+  // ===== FIRMS (12h filter) =====
+  function featureTimeUtc(f){ try{ const d=f.properties?.acq_date, t=String(f.properties?.acq_time||'').padStart(4,'0'); const ymd=d?.split('-').map(Number); if(!ymd||ymd.length!==3) return null; const hh=Number(t.slice(0,2)), mm=Number(t.slice(2,4)); const dt=Date.UTC(ymd[0],ymd[1]-1,ymd[2],hh,mm,0); return isNaN(dt)?null:dt; }catch{return null} }
+  async function fetchFirms12h(){
+    const geo=await fetchJSON(FIRMS_MODIS_24H);
+    const cutoff=Date.now()-FIRMS_WINDOW_HOURS*60*60*1000;
+    const pts=[]; for(const f of geo.features||[]){ if(!f||!f.geometry||f.geometry.type!=="Point") continue; const ts=featureTimeUtc(f); if(ts==null||ts<cutoff) continue; const [lon,lat]=f.geometry.coordinates||[]; if(lon>=BBOX[0]&&lon<=BBOX[2]&&lat>=BBOX[1]&&lat<=BBOX[3]) pts.push({lat,lon,ts}); }
+    return pts.sort((a,b)=>b.ts-a.ts);
+  }
+
+  // ===== UI =====
+  function badges(wx){ if(!wx) return ''; const hit=(wx.tempF!=null&&wx.tempF>THRESH.tempF)&&(wx.rh!=null&&wx.rh<THRESH.rh)&&(wx.windMph!=null&&wx.windMph>THRESH.windMph); const near=(!hit)&&((wx.tempF!=null&&wx.tempF>=NEAR.tempF)||(wx.rh!=null&&wx.rh<=NEAR.rh)||(wx.windMph!=null&&wx.windMph>=NEAR.windMph)); const cross=(wx.tempF!=null&&wx.rh!=null&&wx.tempF>wx.rh); const arr=[]; if(hit) arr.push('🚨 30/30/30'); else if(near) arr.push('⚠ Near 30/30/30'); if(cross) arr.push('⚡ Crossover'); return arr.length? ' · '+arr.join(' · '):''; }
+  function countyCard(name, wx, hotspots){ const el=document.createElement('div'); el.className='card'; const hs=Number.isFinite(hotspots)?` · 🔥 ${hotspots}`:''; const dp=(wx&&Number.isFinite(wx.dewF))?` · DP ${wx.dewF}°F`:''; el.innerHTML=wx?`<h3>${name}</h3><div class="grid" style="grid-template-columns:repeat(3,minmax(0,1fr));gap:.5rem;font-size:.92rem"><div><strong>${Math.round(wx.tempF)}°F</strong><div class="muted">Temp</div></div><div><strong>${wx.rh??'—'}%</strong><div class="muted">RH</div></div><div><strong>${wx.wind}</strong><div class="muted">Wind</div></div></div><div class="muted" style="margin-top:.4rem">${wx.short}${dp}${hs}${badges(wx)}</div>`:`<h3>${name}</h3><div class="muted">Weather unavailable${hs}</div>`; return el; }
+
+  function renderPoints(points){ if(firmsLayer){ firmsLayer.remove(); firmsLayer=null; } const fc={type:'FeatureCollection',features:points.map(p=>({type:'Feature',geometry:{type:'Point',coordinates:[p.lon,p.lat]},properties:{ts:p.ts}}))}; firmsLayer=L.geoJSON(fc,{ pointToLayer:(feat,latlng)=>{ const m=L.circleMarker(latlng,{radius:6,color:'#f59e0b',fillColor:'#f59e0b',fillOpacity:.9,weight:1,opacity:.95}); const ts=new Date(feat.properties.ts).toLocaleString(); m.bindPopup(`<strong>🔥 Hotspot</strong><br>${ts}<br><a href="https://firms.modaps.eosdis.nasa.gov/map/#@${latlng.lng.toFixed(3)},${latlng.lat.toFixed(3)},10z" target="_blank" rel="noopener">Open in FIRMS</a>`); return m; } }).addTo(map); }
+  function fitToPoints(points){ if(!map||!points.length) return; const b=L.latLngBounds(points.map(p=>[p.lat,p.lon])); map.fitBounds(b.pad(0.2)); }
+
+  async function loadData(){
+    $('#updated').textContent='Updating…'; setBadge('#b_firms','warn','FIRMS…'); setBadge('#b_noaa','warn','NOAA…');
+    try{
+      const [wxSettle, pts]=await Promise.all([
+        Promise.allSettled(COUNTIES.map(c=>fetchWeather(c.lat,c.lon))),
+        fetchFirms12h()
+      ]);
+
+      // FIRMS badge
+      setBadge('#b_firms','ok',`FIRMS (${pts.length})`);
+
+      // County cards + hotspot counts
+      const counts=COUNTIES.map(_=>0); for(const p of pts){ COUNTIES.forEach((c,i)=>{ if(hav(c.lat,c.lon,p.lat,p.lon)<=RADIUS_KM) counts[i]++; }); }
+      const frag=document.createDocumentFragment();
+      COUNTIES.forEach((c,i)=>{ const wx=wxSettle[i]?.status==='fulfilled'?wxSettle[i].value:null; frag.appendChild(countyCard(c.name,wx,counts[i])); });
+      $('#list').replaceChildren(frag);
+
+      // NOAA badge
+      const okWx = wxSettle.filter(x=>x.status==='fulfilled' && x.value).length; const total=COUNTIES.length; setBadge('#b_noaa', okWx? 'ok':'warn', `NOAA (${okWx}/${total})`);
+
+      renderPoints(pts); fitToPoints(pts);
+      lastSuccessAt=Date.now(); $('#updated').textContent='Last updated: '+fmt();
+    }catch(e){ setBadge('#b_firms','err','FIRMS err'); setBadge('#b_noaa','err','NOAA err'); logErr('loadData',e); $('#updated').textContent='Error'; }
+  }
+
+  // ===== MAP =====
+  function initMap(){ try{ map=L.map('map').setView([37.131,-77.585],8); baseLight=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors'}); baseDark=L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'© OpenStreetMap contributors, © CARTO'}); (document.documentElement.dataset.theme==='light'?baseLight:baseDark).addTo(map); setBadge('#b_leaflet','ok','Leaflet'); setBadge('#b_map','ok','Map'); map.on('click',e=>{ const z=Math.max(3,Math.min(13,Math.round(map.getZoom()))); const url=`https://firms.modaps.eosdis.nasa.gov/map/#@${e.latlng.lng.toFixed(3)},${e.latlng.lat.toFixed(3)},${z}z`; window.open(url,'_blank','noopener'); }); }catch(e){ setBadge('#b_leaflet','err','Leaflet err'); setBadge('#b_map','err','Map err'); logErr('initMap',e); } }
+  function setMapTheme(){ if(!map) return; const isLight=document.documentElement.dataset.theme==='light'; if(isLight){ if(map.hasLayer(baseDark)) map.removeLayer(baseDark); if(!map.hasLayer(baseLight)) baseLight.addTo(map); } else { if(map.hasLayer(baseLight)) map.removeLayer(baseLight); if(!map.hasLayer(baseDark)) baseDark.addTo(map); } }
+
+  // ===== TOGGLES =====
+  function toggleTheme(){ const isLight=document.documentElement.dataset.theme==='light'; document.documentElement.dataset.theme=isLight?'dark':'light'; set('ff:theme',document.documentElement.dataset.theme); setMapTheme(); }
+  function toggleMapBright(){ const cur=document.documentElement.getAttribute('data-mapbright')==='1'; document.documentElement.setAttribute('data-mapbright',cur?'0':'1'); set('ff:mapbright',cur?'0':'1'); }
+  function applySaved(){ const t=get('ff:theme'); if(t){ document.documentElement.dataset.theme=t; } else { document.documentElement.dataset.theme='light'; } const mb=get('ff:mapbright'); if(mb){ document.documentElement.setAttribute('data-mapbright',mb); } }
+
+  // ===== BOOT =====
+  window.addEventListener('DOMContentLoaded',()=>{
+    applySaved(); initMap();
+    $('#themeBtn').addEventListener('click',toggleTheme);
+    $('#mapBrightBtn').addEventListener('click',toggleMapBright);
+    $('#refreshBtn').addEventListener('click',loadData);
+    // Map shows immediately. Data only loads when you press the button.
+  });
+</script>
+</body>
+</html>
