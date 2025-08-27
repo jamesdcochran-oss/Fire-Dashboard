@@ -1,0 +1,185 @@
+<!-- File: index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Five Forks Fire Weather</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    :root {
+      --bg: #f9fafb;
+      --text: #1f2937;
+      --card: #ffffff;
+      --border: #e5e7eb;
+      --brand: #3b82f6;
+    }
+    [data-theme='dark'] {
+      --bg: #0f172a;
+      --text: #e5e7eb;
+      --card: #111827;
+      --border: #374151;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, "Helvetica Neue", Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      background: var(--bg);
+      color: var(--text);
+      transition: background 0.3s ease, color 0.3s ease;
+    }
+    header {
+      background: var(--brand);
+      color: white;
+      padding: 0.75rem 1rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    h1 {
+      margin: 0;
+      font-size: 1.125rem;
+      line-height: 1.25rem;
+    }
+    .menu { display: flex; gap: 0.5rem; }
+    .btn,
+    .menu a {
+      appearance: none;
+      background: white;
+      color: #1f2937;
+      border: 1px solid var(--border);
+      padding: 0.4rem 0.6rem;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.875rem;
+      text-decoration: none;
+    }
+    .btn[disabled] { opacity: 0.6; cursor: not-allowed; }
+
+    main { display: grid; gap: 1rem; padding: 1rem; }
+    .cards {
+      display: grid;
+      gap: 1rem;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+    .meta { font-size: 0.8rem; color: #6b7280; }
+    .map-wrap { height: 420px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); }
+
+    footer { text-align: center; padding: 1rem; font-size: 0.9rem; color: #6b7280; }
+
+    #spinner { text-align: center; font-size: 1rem; padding: 1rem; display: none; }
+    #cards[aria-busy="true"] { opacity: 0.6; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1 aria-label="Five Forks Fire Weather">🔥 Five Forks Fire Weather</h1>
+    <nav class="menu" aria-label="Primary">
+      <button id="themeBtn" class="btn" type="button" aria-pressed="false" title="Toggle theme">🌓 Theme</button>
+      <button id="refreshBtn" class="btn" type="button" title="Refresh data">🔄 Refresh</button>
+      <a href="https://www.weather.gov/dlh/fwd#" target="_blank" rel="noopener">FWD</a>
+      <a href="https://www.weather.gov/akq/" target="_blank" rel="noopener">AKQ</a>
+      <a href="https://fs-prod-nwcg.s3.us-gov-west-1.amazonaws.com/s3fs-public/publication/pms461.pdf" target="_blank" rel="noopener">IRPG</a>
+    </nav>
+  </header>
+
+  <main>
+    <div id="spinner" role="status" aria-live="polite">🔄 Loading weather data…</div>
+    <div id="updated" class="meta" style="text-align:right;padding-right:0.25rem;">Last updated: —</div>
+
+    <section id="cards" class="cards" aria-live="polite" aria-busy="false"></section>
+    <section class="map-wrap" aria-label="Active wildfire hotspots map"><div id="map" style="height:100%"></div></section>
+  </main>
+
+  <footer>Data: NOAA & NASA FIRMS • Updates hourly</footer>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script>
+    // ---- Constants ----
+    const COUNTIES = [
+      { name: "Amelia", lat: 37.342, lon: -77.980 },
+      { name: "Nottoway", lat: 37.142, lon: -78.089 },
+      { name: "Dinwiddie", lat: 37.077, lon: -77.587 },
+      { name: "Prince George", lat: 37.221, lon: -77.288 },
+      { name: "Brunswick", lat: 36.758, lon: -77.847 },
+      { name: "Greensville", lat: 36.686, lon: -77.542 }
+    ];
+    const FIRMS_URL = "https://firms.modaps.eosdis.nasa.gov/active_fire/c6.1/geojson/MODIS_C6_1_USA_contiguous_and_Hawaii_24h.geojson";
+    // Bounding box for South-Central Virginia (minLon, minLat, maxLon, maxLat)
+    const BBOX = [-78.5, 36.4, -77.0, 37.7];
+
+    // Basemap tiles (light/dark). Why: follow UI theme for better nighttime readability.
+    const TILES = {
+      light: {
+        url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        attr: '© OpenStreetMap contributors'
+      },
+      dark: {
+        url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+        attr: '© OpenStreetMap contributors, © CARTO'
+      }
+    };
+
+    // ---- State ----
+    let inFlight = false; // prevents overlapping refreshes
+    let map, lightLayer, darkLayer; // map + basemap references for theme switching
+
+    // ---- Utils ----
+    function saveTheme(theme) { try { localStorage.setItem('ffwx:theme', theme); } catch {} }
+    function getSavedTheme() { try { return localStorage.getItem('ffwx:theme'); } catch { return null; } }
+
+    function fmtStamp(d = new Date()) {
+      return d.toLocaleString(undefined, { hour12: true });
+    }
+
+    function roundMaybe(n) { return Number.isFinite(n) ? Math.round(n) : null; }
+
+    function withTimeout(ms = 12000) {
+      // Why: avoid hanging UI on slow third-party responses
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), ms);
+      const exec = (input, init = {}) => fetch(input, { ...init, signal: ctrl.signal }).finally(() => clearTimeout(t));
+      return { exec, abort: () => ctrl.abort() };
+    }
+
+    async function fetchJSON(url, options = {}, timeoutMs = 12000) {
+      const ft = withTimeout(timeoutMs);
+      const res = await ft.exec(url, options);
+      if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+      return res.json();
+    }
+
+    async function fetchWeather(lat, lon) {
+      // Why: NWS API requires two hops; wrap in try/catch per county
+      try {
+        const meta = await fetchJSON(`https://api.weather.gov/points/${lat},${lon}`);
+        const hourlyUrl = meta?.properties?.forecastHourly;
+        if (!hourlyUrl) throw new Error('No hourly URL');
+        const data = await fetchJSON(hourlyUrl);
+        const p = data?.properties?.periods?.[0];
+        if (!p) return null;
+        return {
+          temp: `${p.temperature}\u00B0${p.temperatureUnit || 'F'}`,
+          rh: roundMaybe(p?.relativeHumidity?.value),
+          wind: [p.windSpeed || '', p.windDirection || ''].filter(Boolean).join(' '),
+          short: p.shortForecast || '—'
+        };
+      } catch (err) {
+        console.warn('NOAA fetch error:', err);
+        return null;
+      }
+    }
+
+    function countyCard(name, wx) {
+      const el = document.createElement('div');
+      el.className = 'card';
+      el.inner
+</body>
+</html>
