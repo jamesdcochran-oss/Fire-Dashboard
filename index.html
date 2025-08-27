@@ -2,6 +2,194 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Five Forks Fire Dashboard</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+  <style>
+    :root{--bg:#0b1220;--text:#e5e7eb;--card:#0f172a;--border:#23304a;--brand:#2563eb;--muted:#9ca3af}
+    [data-theme='light']{--bg:#f8fafc;--text:#0f172a;--card:#fff;--border:#e2e8f0;--brand:#2563eb;--muted:#64748b}
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,Helvetica Neue,Arial;background:var(--bg);color:var(--text);padding-bottom:env(safe-area-inset-bottom,0)}
+
+    header{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;padding:calc(.6rem + env(safe-area-inset-top,0)) 1rem .6rem;background:#1e53c7;color:#fff}
+    h1{margin:0;font-size:1rem}
+    .btn{appearance:none;border:1px solid var(--border);border-radius:9999px;padding:.35rem .6rem;background:#fff;color:#0f172a;cursor:pointer}
+    .btn-group{display:inline-flex;border:1px solid var(--border);border-radius:9999px;overflow:hidden;background:#fff}
+    .btn-seg{border:0;background:transparent;padding:.35rem .6rem;cursor:pointer}
+    .btn-seg[aria-pressed="true"]{background:#e5e7eb}
+
+    main{max-width:920px;margin:0 auto;padding:1rem;display:grid;gap:1rem}
+    .grid{display:grid;gap:.75rem;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:.9rem}
+    .card h3{margin:.1rem 0 .6rem}.muted{color:var(--muted)}
+    .map{height:420px;border:1px solid var(--border);border-radius:14px;overflow:hidden}
+    .links{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem}
+    .link{display:block;text-align:center;padding:.7rem .8rem;border:1px solid var(--border);border-radius:12px;color:var(--text);text-decoration:none;background:rgba(255,255,255,.04)}
+    .toolbar{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
+    .pill{display:inline-flex;align-items:center;gap:.35rem;padding:.25rem .5rem;border-radius:9999px;border:1px solid var(--border);background:#fff;color:#0f172a;font-size:.75rem}
+
+    /* Make dark tiles more readable */
+    [data-theme='dark'] .leaflet-tile{ filter: brightness(1.35) contrast(1.05) saturate(1.12) }
+    [data-theme='dark'] .leaflet-container{ background:#0f172a }
+  </style>
+</head>
+<body>
+  <header>
+    <div style="display:flex;align-items:center;gap:.6rem">
+      <div style="height:32px;width:32px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:#fff;color:var(--brand);font-weight:700;">🔥</div>
+      <div>
+        <div style="font-size:.65rem;opacity:.85;letter-spacing:.06em">Five Forks</div>
+        <h1>Fire Dashboard</h1>
+      </div>
+    </div>
+    <div style="display:flex;gap:.5rem;align-items:center">
+      <div class="btn-group" role="group" aria-label="Time window">
+        <button class="btn-seg" id="w24" aria-pressed="true">24h</button>
+        <button class="btn-seg" id="w48" aria-pressed="false">48h</button>
+        <button class="btn-seg" id="w7d" aria-pressed="false">7d</button>
+      </div>
+      <button id="themeBtn" class="btn" title="Toggle theme">🌓 Theme</button>
+      <button id="refreshBtn" class="btn" title="Refresh">🔄 Refresh</button>
+      <a id="airnowBtn" class="btn" href="https://fire.airnow.gov/#9/37.131/-77.585" target="_blank" rel="noopener">AirNow</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="card">
+      <div class="toolbar">
+        <h3 style="margin:0">Counties — FIRMS hotspots within 25 km</h3>
+        <span id="statusPill" class="pill">—</span>
+        <span id="updated" class="muted">Loading…</span>
+      </div>
+      <div id="list" class="grid" style="margin-top:.6rem"></div>
+    </section>
+
+    <section class="card">
+      <div class="toolbar">
+        <h3 style="margin:0">Map — NASA FIRMS (click a point → opens FIRMS)</h3>
+        <span id="legend" class="muted">● hotspots</span>
+      </div>
+      <div id="map" class="map"></div>
+    </section>
+
+    <section class="card">
+      <h3>Quick Links</h3>
+      <div class="links">
+        <a class="link" href="https://www.weather.gov/akq/" target="_blank" rel="noopener">NWS AKQ</a>
+        <a class="link" href="https://www.weather.gov/dlh/fwd#" target="_blank" rel="noopener">FWD</a>
+        <a class="link" href="https://fs-prod-nwcg.s3.us-gov-west-1.amazonaws.com/s3fs-public/publication/pms461.pdf" target="_blank" rel="noopener">IRPG (PDF)</a>
+        <a class="link" href="https://firms.modaps.eosdis.nasa.gov/map/#@-77.585,37.131,10z" target="_blank" rel="noopener">NASA FIRMS Viewer</a>
+        <a class="link" href="https://fire.airnow.gov/#9/37.131/-77.585" target="_blank" rel="noopener">AirNow Fire Map</a>
+        <!-- Spot Forecast removed as requested -->
+      </div>
+    </section>
+
+    <footer class="muted" style="text-align:center">Single-file build · No service worker/manifest required · Data: NASA FIRMS</footer>
+  </main>
+
+<script>
+  // ---------- Config ----------
+  const COUNTIES=[
+    { name:"Amelia", lat:37.342, lon:-77.980 },
+    { name:"Nottoway", lat:37.142, lon:-78.089 },
+    { name:"Dinwiddie", lat:37.077, lon:-77.587 },
+    { name:"Prince George", lat:37.221, lon:-77.288 },
+    { name:"Brunswick", lat:36.758, lon:-77.847 },
+    { name:"Greensville", lat:36.686, lon:-77.542 }
+  ];
+  const HOTSPOT_RADIUS_KM=25;
+  const BBOX=[-78.5,36.4,-77.0,37.7]; // minLon,minLat,maxLon,maxLat
+  const FIRMS_MODIS = {
+    '24h': 'https://firms.modaps.eosdis.nasa.gov/active_fire/c6.1/geojson/MODIS_C6_1_USA_contiguous_and_Hawaii_24h.geojson',
+    '48h': 'https://firms.modaps.eosdis.nasa.gov/active_fire/c6.1/geojson/MODIS_C6_1_USA_contiguous_and_Hawaii_48h.geojson',
+    '7d' : 'https://firms.modaps.eosdis.nasa.gov/active_fire/c6.1/geojson/MODIS_C6_1_USA_contiguous_and_Hawaii_7d.geojson'
+  };
+
+  // ---------- State ----------
+  let windowKey = localStorage.getItem('ff:window') || '24h';
+  let map, baseLight, baseDark, firmsLayer;
+
+  // ---------- Utils ----------
+  const $=s=>document.querySelector(s);
+  const fmt=()=>new Date().toLocaleString();
+  const setPressed=(id,pressed)=>{ const el=$(id); if(!el) return; el.setAttribute('aria-pressed', String(pressed)); };
+  const hav=(a,b,c,d)=>{const R=6371,toR=x=>x*Math.PI/180;const dLat=toR(c-a),dLon=toR(d-b);const A=Math.sin(dLat/2)**2+Math.cos(toR(a))*Math.cos(toR(c))*Math.sin(dLon/2)**2;return 2*R*Math.asin(Math.sqrt(A))};
+  function fitToPoints(points){ if(!map||!points.length) return; const latlngs=points.map(p=>[p.lat,p.lon]); const b=L.latLngBounds(latlngs); map.fitBounds(b.pad(0.2)); }
+
+  async function fetchFirms(url){
+    try{
+      const res=await fetch(url);
+      if(!res.ok) throw new Error('HTTP '+res.status);
+      const geo=await res.json();
+      const pts=[]; for(const f of geo.features||[]){ if(!f||!f.geometry||f.geometry.type!=="Point") continue; const [lon,lat]=f.geometry.coordinates||[]; if(lon>=BBOX[0]&&lon<=BBOX[2]&&lat>=BBOX[1]&&lat<=BBOX[3]) pts.push({lat,lon}); }
+      return pts;
+    }catch(e){ console.warn('FIRMS error',e); return []; }
+  }
+
+  function renderList(points){
+    const host=$('#list'); host.innerHTML='';
+    for(const c of COUNTIES){ let n=0; for(const p of points){ if(hav(c.lat,c.lon,p.lat,p.lon)<=HOTSPOT_RADIUS_KM) n++; }
+      const card=document.createElement('div'); card.className='card';
+      card.innerHTML=`<h3>${c.name}</h3><div class="muted">🔥 ${n} within ${HOTSPOT_RADIUS_KM} km (${windowKey})</div>`;
+      host.appendChild(card);
+    }
+  }
+
+  function renderPoints(points){
+    if(firmsLayer){ firmsLayer.remove(); firmsLayer=null; }
+    const fc={ type:'FeatureCollection', features: points.map(p=>({ type:'Feature', geometry:{ type:'Point', coordinates:[p.lon,p.lat] } })) };
+    firmsLayer=L.geoJSON(fc,{ pointToLayer:(_,latlng)=> L.circleMarker(latlng,{radius:6,color:'#f59e0b',fillColor:'#f59e0b',fillOpacity:.9,weight:1,opacity:.95}) }).addTo(map);
+  }
+
+  async function refresh(){
+    $('#updated').textContent='Updating…';
+    $('#statusPill').textContent='…';
+    const url = FIRMS_MODIS[windowKey] || FIRMS_MODIS['24h'];
+    const pts = await fetchFirms(url);
+    $('#updated').textContent='Last updated: '+fmt();
+    $('#statusPill').textContent = pts.length ? `Points: ${pts.length}` : 'No points';
+    renderList(pts);
+    renderPoints(pts);
+    fitToPoints(pts);
+  }
+
+  function initMap(){
+    map=L.map('map').setView([37.131,-77.585],8);
+    baseLight=L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap contributors'});
+    baseDark =L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'© OpenStreetMap contributors, © CARTO'});
+    (document.documentElement.dataset.theme==='light'?baseLight:baseDark).addTo(map);
+    map.on('click',e=>{
+      const z=Math.max(3,Math.min(13,Math.round(map.getZoom())));
+      const url=`https://firms.modaps.eosdis.nasa.gov/map/#@${e.latlng.lng.toFixed(3)},${e.latlng.lat.toFixed(3)},${z}z`;
+      window.open(url,'_blank','noopener');
+    });
+  }
+  function setMapTheme(){ if(!map) return; const isLight=document.documentElement.dataset.theme==='light'; if(isLight){ if(map.hasLayer(baseDark)) map.removeLayer(baseDark); if(!map.hasLayer(baseLight)) baseLight.addTo(map);} else { if(map.hasLayer(baseLight)) map.removeLayer(baseLight); if(!map.hasLayer(baseDark)) baseDark.addTo(map);} }
+
+  function toggleTheme(){ const isLight=document.documentElement.dataset.theme==='light'; document.documentElement.dataset.theme=isLight?'dark':'light'; setMapTheme(); localStorage.setItem('ff:theme', document.documentElement.dataset.theme); }
+  function applySavedTheme(){ const t=localStorage.getItem('ff:theme'); if(t){ document.documentElement.dataset.theme=t; } else { document.documentElement.dataset.theme='light'; } }
+  function setWindow(key){ windowKey=key; localStorage.setItem('ff:window', key); setPressed('#w24', key==='24h'); setPressed('#w48', key==='48h'); setPressed('#w7d', key==='7d'); refresh(); }
+
+  window.addEventListener('DOMContentLoaded',()=>{
+    applySavedTheme();
+    initMap();
+    // controls
+    $('#themeBtn').addEventListener('click',toggleTheme);
+    $('#refreshBtn').addEventListener('click',refresh);
+    $('#w24').addEventListener('click',()=>setWindow('24h'));
+    $('#w48').addEventListener('click',()=>setWindow('48h'));
+    $('#w7d').addEventListener('click',()=>setWindow('7d'));
+    setWindow(windowKey);
+  });
+</script>
+</body>
+</html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Five Forks Fire Dashboard</title>
 
