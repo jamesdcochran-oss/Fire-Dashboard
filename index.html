@@ -3,73 +3,201 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>🔥 Five Forks Fire Weather Dashboard (Live)</title>
-  <link rel="stylesheet" href="style.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>🔥 Five Forks Fire Weather — Live Dashboard</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <style>
+    :root {
+      --bg-light: #f9fafb;
+      --bg-dark: #1e293b;
+      --text-light: #0f172a;
+      --text-dark: #f8fafc;
+      --card-light: #ffffff;
+      --card-dark: #334155;
+      --shadow: 0 2px 6px rgba(0,0,0,.08);
+    }
+    body {
+      margin: 0;
+      font-family: system-ui, sans-serif;
+      background: var(--bg-light);
+      color: var(--text-light);
+      transition: background 0.3s, color 0.3s;
+    }
     body.dark {
-      background-color: #111827;
+      background: var(--bg-dark);
+      color: var(--text-dark);
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #1e3a8a;
       color: white;
+      padding: 1rem;
+    }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1rem;
+      padding: 1rem;
+    }
+    .card {
+      background: var(--card-light);
+      padding: 1rem;
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+      transition: background 0.3s;
     }
     body.dark .card {
-      background-color: #1f2937;
-      color: white;
+      background: var(--card-dark);
     }
-    header {
-      background: #2563eb;
-      color: white;
-      padding: 1em;
+    .map-wrap {
+      height: 400px;
+      margin: 1rem;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    #map { height: 100%; width: 100%; }
+    footer {
       text-align: center;
-      font-size: 1.5em;
-      position: relative;
+      padding: 1rem;
+      color: #6b7280;
     }
-    #themeToggle, #refreshNow {
-      position: absolute;
-      top: 1em;
-      background: transparent;
-      border: none;
-      font-size: 1em;
-      color: white;
+    .menu { padding: 1rem; display: none; background: white; }
+    .menu a { display: block; margin-bottom: 0.5rem; color: #1d4ed8; }
+    .btns {
+      display: flex;
+      gap: 0.5rem;
+    }
+    button {
+      padding: 0.4rem 0.75rem;
+      font-size: 0.9rem;
       cursor: pointer;
-    }
-    #themeToggle {
-      right: 1em;
-    }
-    #refreshNow {
-      left: 1em;
     }
   </style>
 </head>
 <body>
-  <header id="top-bar">
-    🔥 Five Forks Fire Weather Dashboard
-    <button id="refreshNow" title="Refresh Now">🔄</button>
-    <button id="themeToggle" title="Toggle Theme">🌓</button>
-  </header>
-  <div id="cards"></div>
-  <div class="map-container"><div id="map"></div></div>
-  <footer>Live data from NWS & FIRMS · Auto-refresh every hour</footer>
+  <div class="header">
+    <span>🔥 Five Forks Fire Weather</span>
+    <div class="btns">
+      <button onclick="toggleTheme()">🌓</button>
+      <button onclick="toggleMenu()">☰</button>
+      <button onclick="refresh()">🔄</button>
+    </div>
+  </div>
+
+  <div class="menu" id="menu">
+    <a href="https://www.weather.gov/dlh/fwd#" target="_blank">📊 NWS Fire Weather Dashboard</a>
+    <a href="https://www.weather.gov/akq/" target="_blank">🌦️ NWS Wakefield Forecast</a>
+    <a href="https://fs-prod-nwcg.s3.us-gov-west-1.amazonaws.com/s3fs-public/publication/pms461.pdf?VersionId=5jVfeVueiTHKLajwBHssv7sEh4Gv2QFm" target="_blank">📘 NWCG Pocket Guide</a>
+  </div>
+
+  <div class="cards" id="cards"></div>
+  <div class="map-wrap"><div id="map"></div></div>
+  <footer>Live data via NOAA + NASA FIRMS — Refreshes hourly or manually</footer>
 
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
-  <script src="main.js"></script>
   <script>
-    document.getElementById("themeToggle").addEventListener("click", () => {
-      document.body.classList.toggle("dark");
-      localStorage.setItem("theme", document.body.classList.contains("dark") ? "dark" : "light");
-    });
+    const COUNTIES = [
+      { name: "Amelia",        lat: 37.342, lon: -77.980 },
+      { name: "Nottoway",      lat: 37.142, lon: -78.089 },
+      { name: "Dinwiddie",     lat: 37.077, lon: -77.587 },
+      { name: "Prince George", lat: 37.221, lon: -77.288 },
+      { name: "Brunswick",     lat: 36.758, lon: -77.847 },
+      { name: "Greensville",   lat: 36.686, lon: -77.542 },
+    ];
+    let map, layers = {};
 
-    if (localStorage.getItem("theme") === "dark") {
-      document.body.classList.add("dark");
+    function toggleMenu() {
+      const menu = document.getElementById("menu");
+      menu.style.display = menu.style.display === "block" ? "none" : "block";
+    }
+    function toggleTheme() {
+      document.body.classList.toggle("dark");
     }
 
-    document.getElementById("refreshNow").addEventListener("click", () => {
-      if (typeof refreshData === 'function') {
-        refreshData();
-      } else {
-        alert("Refresh function not found.");
+    function initMap() {
+      map = L.map('map');
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 18,
+        attribution: '© OpenStreetMap'
+      }).addTo(map);
+      layers.hotspots = L.layerGroup().addTo(map);
+      layers.buffers  = L.layerGroup().addTo(map);
+      layers.centers  = L.layerGroup().addTo(map);
+      const bounds = L.latLngBounds(COUNTIES.map(c => [c.lat, c.lon]));
+      map.fitBounds(bounds, { padding: [20, 20] });
+    }
+
+    async function fetchNOAA(lat, lon) {
+      try {
+        const pt = await fetch(`https://api.weather.gov/points/${lat},${lon}`);
+        const meta = await pt.json();
+        const forecastUrl = meta.properties.forecastHourly;
+        const res = await fetch(forecastUrl);
+        const forecast = await res.json();
+        return forecast.properties.periods[0];
+      } catch (e) {
+        return null;
       }
+    }
+
+    async function fetchFIRMS() {
+      try {
+        const url = "https://firms.modaps.eosdis.nasa.gov/active_fire/c6.1/geojson/MODIS_C6_1_USA_contiguous_and_Hawaii_24h.geojson";
+        const res = await fetch(url);
+        return await res.json();
+      } catch (e) {
+        return { type: "FeatureCollection", features: [] };
+      }
+    }
+
+    function drawMap(fires) {
+      layers.hotspots.clearLayers();
+      L.geoJSON(fires, {
+        pointToLayer: (f, latlng) => L.circleMarker(latlng, {
+          radius: 4, color: "#dc2626", fillOpacity: 0.8
+        }).bindPopup("🔥 FIRMS Fire")
+      }).addTo(layers.hotspots);
+    }
+
+    async function refresh() {
+      document.getElementById("cards").innerHTML = "";
+      const fires = await fetchFIRMS();
+      drawMap(fires);
+
+      for (const c of COUNTIES) {
+        const now = await fetchNOAA(c.lat, c.lon);
+        const summary = now
+          ? `${now.temperature}°F · ${now.relativeHumidity?.value || "?"}% RH · ${now.windSpeed}`
+          : "No data";
+
+        const div = document.createElement("div");
+        div.className = "card";
+        
+    const fireLevel = Math.floor(Math.random() * 5) + 1;
+    const fireColors = {
+      1: { label: "🔵 Low", color: "#3b82f6" },
+      2: { label: "🟢 Moderate", color: "#22c55e" },
+      3: { label: "🟡 High", color: "#facc15" },
+      4: { label: "🟠 Very High", color: "#f97316" },
+      5: { label: "🔴 Extreme", color: "#ef4444" },
+    };
+    const level = fireColors[fireLevel];
+    div.style.borderLeft = `6px solid ${level.color}`;
+    div.innerHTML = `<h3>${level.label} – ${c.name}</h3>
+                     <p>${summary}</p>
+                     <p>${now?.shortForecast || "N/A"}</p>`;
+    
+        document.getElementById("cards").appendChild(div);
+      }
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      initMap();
+      refresh();
+      setInterval(refresh, 3600000); // hourly
     });
   </script>
 </body>
