@@ -1,0 +1,27 @@
+name: Update Fire Danger
+
+on:
+  schedule:
+    - cron: '30 12 * * *'  # 08:30 AM Eastern Time
+  workflow_dispatch:
+
+jobs:
+  update-fire-danger:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm install node-fetch@2 cheerio
+      - name: Run scraper
+        run: node fire-scraper.js
+      - name: Commit and push
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add fire-danger.json
+          git commit -m "Daily update: fire danger levels"
+          git push
