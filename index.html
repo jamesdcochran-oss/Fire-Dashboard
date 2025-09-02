@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>🔥 Five Forks Fire Weather</title>
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+
+  <!-- Turf -->
+  <script src="https://unpkg.com/@turf/turf@6/turf.min.js" defer></script>
+
+  <!-- MarkerCluster -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css" />
+  <script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js" defer></script>
+
+  <style>
+    :root { --bg:#0f172a; --text:#e5e7eb; --card:#111827; --border:#334155; --brand:#3b82f6; --muted:#9ca3af }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--text)}
+    header{background:var(--brand);color:#fff;padding:.75rem 1rem;display:flex;justify-content:space-between;align-items:center;gap:.5rem;flex-wrap:wrap}
+    h1{margin:0;font-size:1.05rem}
+    .menu{display:flex;gap:.5rem;flex-wrap:wrap}
+    .btn,.menu a,select.btn{background:#fff;color:#111;border:1px solid #e5e7eb;padding:.35rem .6rem;border-radius:9999px;text-decoration:none;font-size:.85rem;cursor:pointer}
+    .btn[disabled]{opacity:.6;cursor:progress}
+    main{display:grid;gap:1rem;padding:1rem}
+    .cards{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:.9rem;box-shadow:0 1px 4px rgba(0,0,0,.25)}
+    .meta{font-size:.8rem;color:var(--muted);text-align:right}
+    .map-wrap{height:520px;border-radius:14px;overflow:hidden;border:1px solid var(--border)}
+    footer{color:var(--muted);text-align:center;padding:1rem}
+    .pill{display:inline-flex;align-items:center;gap:.35rem;padding:.25rem .5rem;border-radius:9999px;border:1px solid var(--border);background:#fff;color:#111;font-size:.75rem}
+    .ok{color:#10b981;border-color:#10b981}.warn{color:#f59e0b;border-color:#f59e0b}.err{color:#ef4444;border-color:#ef4444}
+    .flags{display:flex;gap:.35rem;flex-wrap:wrap;margin-top:.35rem}
+    .flag{font-weight:700;font-size:.8rem}
+    .flash{color:#ef4444;animation:flash 1s steps(2,end) infinite}
+    @keyframes flash{50%{opacity:.2}}
+    .legend{font-size:.8rem;color:var(--muted)}
+    .legend code{background:#0b1225;border:1px solid var(--border);border-radius:6px;padding:.1rem .3rem;color:#e5e7eb}
+    details summary{cursor:pointer}
+    .leaflet-container{height:100%;width:100%}
+    pre.diag{white-space:pre-wrap;margin:0;font-size:.8rem;color:#e5e7eb}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🔥 Five Forks Fire Weather</h1>
+    <nav class="menu" aria-label="Primary">
+      <button id="unitBtn" class="btn" title="Toggle °F/°C">°F</button>
+      <button id="refreshBtn" class="btn" title="Refresh">🔄 Refresh</button>
+      <label for="radiusSel" class="btn" title="Hotspot radius (km)" style="display:inline-flex;gap:.4rem;align-items:center">
+        Radius
+        <select id="radiusSel" class="btn" style="margin-left:.25rem">
+          <option value="20">20 km</option>
+          <option value="30">30 km</option>
+          <option value="40">40 km</option>
+        </select>
+      </label>
+      <span id="statusPill" class="pill" aria-live="assertive">—</span>
+      <a href="https://www.weather.gov/akq/" target="_blank" rel="noopener noreferrer">AKQ</a>
+      <a href="https://www.weather.gov/akq/FIREMAIN" target="_blank" rel="noopener noreferrer">AKQ Fire</a>
+      <a href="https://fs-prod-nwcg.s3.us-gov-west-1.amazonaws.com/s3fs-public/publication/pms461.pdf" target="_blank" rel="noopener noreferrer">IRPG</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="legend">
+      <details>
+        <summary>ℹ️ Fire weather rules used here</summary>
+        <div style="margin-top:.4rem">
+          <div><strong>30/30/30 rule</strong>: <code>T ≥ 30°C (86°F)</code>, <code>RH ≤ 30%</code>, <code>Wind ≥ 30 km/h (~18 mph)</code>. <em>(blinks)</em></div>
+          <div>We flag <strong>NEAR</strong> 30/30/30 if within ~10% (or ≥2 of 3 near).</div>
+        </div>
+      </details>
+    </div>
+
+    <div id="updated" class="meta">Last updated: —</div>
+    <section id="cards" class="cards" aria-live="polite" aria-busy="false"></section>
+
+    <section id="diag" class="card" style="display:none">
+      <strong>Diagnostics</strong>
+      <pre class="diag" id="diagPre"></pre>
+    </section>
+
+    <section class="map-wrap" aria-label="Active wildfire hotspots map"><div id="map" style="height:100%"></div></section>
+  </main>
+
+  <footer>Data: NOAA & NASA FIRMS • Updates hourly</footer>
+
+  <script>
+    const APP_VERSION = '1.7.2';
+    document.title = `🔥 Five Forks Fire Weather · ${APP_VERSION}`;
+    const DEBUG = /[?&]debug=1\b/.test(location.search);
+
+    async function fetchWithRetry(url, opts={}, attempts=3, delay=1000){
+      for(let i=0;i<attempts;i++){
+        try{ return await fetchJSON(url, opts); }
+        catch(err){ if(i===attempts-1) throw err; await new Promise(r=>setTimeout(r, delay*(i+1))); }
+      }
+    }
+
+    const COUNTIES = [
+      { name: "Amelia",        lat: 37.342, lon: -77.980 },
+      { name: "Nottoway",      lat: 37.142, lon: -78.089 },
+      { name: "Dinwiddie",     lat: 37.077, lon: -77.587 },
+      { name: "Prince George", lat: 37.221, lon: -77.288 },
+      { name: "Brunswick",     lat: 36.758, lon: -77.847 },
+      { name: "Greensville",   lat: 36.686, lon: -77.542 }
+    ];
+
+    const FIRMS_SOURCES = [
+      'https://firms.modaps.eosdis.nasa.gov/active_fire/viirs/geojson/VIIRS_I_NRT_USA_contiguous_and_Hawaii_24h.geojson',
+      'https://firms.modaps.eosdis.nasa.gov/active_fire/c6.1/geojson/MODIS_C6_1_USA_contiguous_and_Hawaii_24h.geojson'
+    ];
+    const ESRI_VIIRS = 'https://services9.arcgis.com/RHVPKKiFTONKtxq3/arcgis/rest/services/Satellite_VIIRS_Thermal_Hotspots_and_Fire_Activity/FeatureServer/0/query';
+    const ESRI_MODIS = 'https://services9.arcgis.com/RHVPKKiFTONKtxq3/arcgis/rest/services/Satellite_MODIS_Thermal_Hotspots_and_Fire_Activity/FeatureServer/0/query';
+
+    let unit = localStorage.getItem('ff:unit') || 'F';
+    let radiusKm = parseInt(localStorage.getItem('ff:radius') || '30', 10);
+    let lastSuccessAt = 0;
+    let currentCtrl = null;
+    const hourlyUrlCache = new Map();
+
+    const $ = sel => document.querySelector(sel);
+    function fmtStamp(d=new Date()){ return d.toLocaleString(undefined,{hour12:true}); }
+    const toC = f => Math.round(((f-32)*5)/9);
+    function setStatus(text, cls){
+      const pill = $('#statusPill');
+      if(!pill) return;
+      pill.className = 'pill ' + (cls||'');
+      pill.textContent = text;
+    }
+    async function fetchJSON(url, { signal, headers } = {}){
+      const res = await fetch(url, { signal, headers, cache: 'no-store' });
+      if(!res.ok) throw new Error('HTTP '+res.status+' for '+url);
+      return res.json();
+    }
+    function el(tag, attrs={}, ...children){
+      const node = document.createElement(tag);
+      for(const [k,v] of Object.entries(attrs||{})){
+        if(k === 'class') node.className = v; else if(k === 'text') node.textContent = v; else node.setAttribute(k, v);
+      }
+      for(const c of children){ if(typeof c === 'string') node.appendChild(document.createTextNode(c)); else if(c) node.appendChild(c); }
+      return node;
+    }
+    function rhFrom(Tc, Tdc){
+      if(!Number.isFinite(Tc) || !Number.isFinite(Tdc)) return null;
+      const a=17.625, b=243.04;
+      const es = 6.112 * Math.exp((a*Tc)/(b+Tc));
+      const e  = 6.112 * Math.exp((a*Tdc)/(b+Tdc));
+      return 100*(e/es);
+    }
+    function parseWindMph(s){ const nums = (s||'').match(/\d+/g)||[]; return nums.length? Math.max(...nums.map(n=>parseInt(n,10))) : null; }
+    function flags303030(tempF, rh, windStr){
+      const tempC = (tempF!=null)? (tempF-32)*5/9 : null; const windMph = parseWindMph(windStr);
+      const within = (tempC!=null && rh!=null && windMph!=null) && tempC>=30 && rh<=30 && windMph>=18;
+      const near = !within && ( ((tempC!=null && tempC>=28)?1:0) + ((rh!=null && rh<=33)?1:0) + ((windMph!=null && windMph>=16)?1:0) ) >= 2;
+      return { within, near };
+    }
+
+    async function fetchWeather(lat, lon, signal){
+      try{
+        const key = lat.toFixed(3)+","+lon.toFixed(3);
+        let hourlyUrl = hourlyUrlCache.get(key);
+        if(!hourlyUrl){
+          const meta = await fetchWithRetry(`https://api.weather.gov/points/${lat},${lon}`, { signal, headers:{'Accept':'application/geo+json','Cache-Control':'no-cache'} });
+          hourlyUrl = meta?.properties?.forecastHourly; if(!hourlyUrl) throw new Error('No hourly URL');
+          hourlyUrlCache.set(key, hourlyUrl);
+        }
+        const bust = `v=${Date.now()}`;
+        const sep  = hourlyUrl.includes('?') ? '&' : '?';
+        const hourlyNoCache = hourlyUrl + sep + bust;
+        const data = await fetchWithRetry(hourlyNoCache, { signal, headers:{'Accept':'application/geo+json','Cache-Control':'no-cache'} });
+        const p = data?.properties?.periods?.[0]; if(!p) return null;
+        const tempF = Number.isFinite(p?.temperature) ? p.temperature : null;
+        const rhRaw = p?.relativeHumidity?.value;
+        const rh = (typeof rhRaw === 'number') ? rhRaw : null;
+        const dpRaw = p?.dewpoint?.value;
+        const dpC = (typeof dpRaw === 'number') ? dpRaw : null;
+        return {
+          tempF,
+          rh,
+          dpC,
+          wind: [p.windSpeed||'', p.windDirection||''].filter(Boolean).join(' '),
+          short: p.shortForecast || '—'
+        };
+      }catch(e){ console.warn('NOAA fetch error', e); return null; }
+    }
+
+    async function fetchAllFirms(signal){
+      try{
+        const results = await Promise.allSettled(FIRMS_SOURCES.map(u => fetchWithRetry(u, { signal })));
+        const collections = results.filter(r => r.status==='fulfilled').map(r => r.value);
+        const seen = new Set(); const out = [];
+        for(const col of collections){ const feats = col?.features || [];
+          for(const f of feats){ if(!(f && f.geometry && f.geometry.type==='Point')) continue; const [x,y]=f.geometry.coordinates||[]; if(!Number.isFinite(x)||!Number.isFinite(y)) continue; const key=x.toFixed(3)+","+y.toFixed(3); if(!seen.has(key)){ seen.add(key); out.push(f);} }
+        }
+        if(out.length){ return { type:'FeatureCollection', features: out }; }
+      }catch(err){ console.warn('NASA FIRMS fetch failed, using Esri fallback', err); }
+      return { type:'FeatureCollection', features: [] };
+    }
+
+    function renderCard(name, wx, hotspots){
+      const tempF = (wx && Number.isFinite(wx.tempF)) ? wx.tempF : null;
+      const tempText = (tempF!=null) ? (unit==='C'? toC(tempF)+'°C' : Math.round(tempF)+'°F') : '—';
+      const tempC = tempF!=null ? (tempF - 32) * 5 / 9 : null;
+      let rhDisplay = null, rhEstimated = false;
+      if(Number.isFinite(wx?.rh)){ rhDisplay = Math.max(1, Math.min(100, Math.round(wx.rh))); }
+      else if(Number.isFinite(wx?.dpC) && tempC!=null){ rhDisplay = Math.round(rhFrom(tempC, wx.dpC)); rhEstimated = true; }
+      const rhText = rhDisplay!=null ? `${rhDisplay}% RH${rhEstimated?' (est)':''}` : '—% RH';
+      let dpC = Number.isFinite(wx?.dpC)?wx.dpC:null; if(dpC!=null && tempC!=null && dpC>tempC+0.5) dpC=tempC;
+      const dpText = dpC!=null ? (unit==='C'?Math.round(dpC)+'°C':Math.round((dpC*9/5)+32)+'°F') : '—';
+      const wind = (wx && wx.wind)?' · '+wx.wind:''; const hs = Number.isFinite(hotspots)?` · 🔥 ${hotspots}`:'';
+      const f3030 = wx?flags303030(tempF, rhDisplay, wx.wind):{within:false,near:false};
+      const flagsEl = el('div',{class:'flags'});
+      if(f3030.within){ flagsEl.appendChild(el('span',{class:'flag flash',text:'30/30/30'})); }
+      else if(f3030.near){ flagsEl.appendChild(el('span',{class:'flag flash',text:'NEAR 30/30/30'})); }
+      return el('div',{class:'card'},
+        el('strong',{text:name}),el('br'),
+        el('span',{text:`${tempText} · ${rhText} · DP ${dpText}${wind}`}),el('br'),
+        el('span',{text:(wx?wx.short:'Weather unavailable')+hs}),flagsEl);
+    }
+
+    function countHotspotsNear(geojson,lat,lon,km){
+      if(!geojson?.features?.length)return 0;
+      const circle=turf.circle([lon,lat],km,{units:'kilometers'});
+      const pts=turf.points(geojson.features.map(f=>f.geometry.coordinates));
+      return turf.pointsWithinPolygon(pts,circle).features.length;
+    }
+
+    async function refresh(){
+      if(currentCtrl) currentCtrl.abort();
+      const ctrl=new AbortController(); currentCtrl=ctrl;
+      setStatus('Loading…'); $('#refreshBtn').setAttribute('disabled','true');
+      $('#cards').setAttribute('aria-busy','true');
+      $('#updated').textContent='Last updated: '+fmtStamp()+' · v'+APP_VERSION;
+      try{
+        const [firms, wxResults]=await Promise.all([
+          fetchAllFirms(ctrl.signal),
+          Promise.all(COUNTIES.map(c=>fetchWeather(c.lat,c.lon,ctrl.signal)))
+        ]);
+        const frag=document.createDocumentFragment();
+        COUNTIES.forEach((c,i)=>{const hs=countHotspotsNear(firms,c.lat,c.lon,radiusKm); frag.appendChild(renderCard(c.name,wxResults[i],hs));});
+        $('#cards').replaceChildren(frag);
+        lastSuccessAt=Date.now(); setStatus('Fresh','ok'); ensureMap(firms);
+      }catch(e){ if(e.name!=='AbortError'){ console.warn(e); setStatus('Error','err'); } }
+      finally{ $('#cards').setAttribute('aria-busy','false'); $('#refreshBtn').removeAttribute('disabled'); }
+    }
+
+    let map, firmsCluster, centersLayer, fitted=false;
+    function ensureMap(firms){
+      if(!map){
+        map=L.map('map').setView([37.1,-77.5],8);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(map);
+        firmsCluster=L.markerClusterGroup();
+        centersLayer=L.layerGroup().addTo(map);
+        map.addLayer(firmsCluster);
+        L.control.layers({}, {'🔥 Hotspots':firmsCluster,'📍 County centers':centersLayer},{collapsed:true}).addTo(map);
+      }
+      firmsCluster.clearLayers(); centersLayer.clearLayers();
+      firms.features.forEach(f=>{
+        if(f && f.geometry && Array.isArray(f.geometry.coordinates)){
+          const [lon,lat]=f.geometry.coordinates; if(!Number.isFinite(lat)||!Number.isFinite(lon))return;
+          const conf=(f?.properties?.confidence||'').toLowerCase();
+          let color='#ffa500'; if(conf.includes('low'))color='#facc15'; else if(conf.includes('high'))color='#ef4444';
+          const radius=Math.min(12,Math.max(4,(f?.properties?.brightness||300)/100));
+          const firmsUrl=`https://firms.modaps.eosdis.nasa.gov/map/#d:24hrs;@${lon.toFixed(4)},${lat.toFixed(4)},12z`;
+          const gmapsUrl=`https://www.google.com/maps?q=${lat.toFixed(5)},${lon.toFixed(5)}`;
+          const html=`🔥 Fire detected<br><a href="${firmsUrl}" target="_blank" rel="noopener noreferrer">FIRMS</a> · <a href="${gmapsUrl}" target="_blank" rel="noopener noreferrer">Google Maps</a>`;
+          const marker=L.circleMarker([lat,lon],{radius,fillColor:color,color,weight:1,opacity:1,fillOpacity:0.8}).bindPopup(html);
+          firmsCluster.addLayer(marker);
+        }
+      });
+      COUNTIES.forEach(c=>{
+        L.circleMarker([c.lat,c.lon],{radius:6,color:'#2563eb',weight:2,fillOpacity:0.2})
+          .bindPopup(`<strong>${c.name}</strong>`).addTo(centersLayer);
+      });
+      if(!fitted){ try{ const group=L.featureGroup([firmsCluster,centersLayer]); map.fitBounds(group.getBounds().pad(0.2)); }catch{} fitted=true; }
+    }
+
+    $('#unitBtn').textContent='°'+unit;
+    $('#unitBtn').addEventListener('click',()=>{ unit=(unit==='F'?'C':'F'); localStorage.setItem('ff:unit',unit); $('#unitBtn').textContent='°'+unit; refresh(); });
+    $('#refreshBtn').addEventListener('click',refresh);
+    const radiusSel=$('#radiusSel');
+    if(radiusSel){ radiusSel.value=String(radiusKm); radiusSel.addEventListener('change',()=>{ radiusKm=parseInt(radiusSel.value,10)||30; localStorage.setItem('ff:radius',String(radiusKm)); refresh(); }); }
+    function updateOnlineStatus(){ if(!navigator.onLine){ setStatus('Offline','err'); } else if(lastSuccessAt && Date.now()-lastSuccessAt>90*60*1000){ setStatus('Stale','warn'); } else if(lastSuccessAt){ setStatus('Fresh','ok'); } }
+    window.addEventListener('online',updateOnlineStatus);
+    window.addEventListener('offline',updateOnlineStatus);
+    refresh(); setInterval(refresh,60*60*1000);
+  </script>
+</body>
+</html>
