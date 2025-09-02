@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VA Fire Weather Dashboard — Six Counties</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <style>
+    :root{
+      --bg:#f8fafc;          /* light bg */
+      --ink:#0f172a;         /* text */
+      --card:#ffffff;        /* panels */
+      --border:#e2e8f0;      /* borders */
+      --brand:#2563eb;       /* header blue */
+      --muted:#64748b;       /* meta text */
+      --shadow:0 6px 20px rgba(2,8,23,.06);
+      --rad:14px;
+    }
+    [data-theme="dark"]{
+      --bg:#0b1220;          /* deep slate */
+      --ink:#e5e7eb;         /* light text */
+      --card:#111827;        /* dark panel */
+      --border:#374151;      /* dark border */
+      /* map stays bright by design */
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--ink);font-family:System-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,Helvetica Neue,Arial,sans-serif}
+    header{background:var(--brand);color:#fff;padding:.8rem 1rem;display:flex;align-items:center;justify-content:space-between}
+    h1{margin:0;font-size:1.1rem;letter-spacing:.2px}
+    .menu{display:flex;gap:.5rem}
+    .btn{appearance:none;border:1px solid rgba(255,255,255,.25);background:#fff;color:#0f172a;padding:.4rem .6rem;border-radius:8px;cursor:pointer;font-size:.9rem}
+    .btn[disabled]{opacity:.6;cursor:not-allowed}
+
+    main{max-width:1200px;margin:0 auto;padding:1rem;display:grid;gap:1rem}
+    .meta{font-size:.85rem;color:var(--muted);text-align:right}
+
+    .card{background:var(--card);border:1px solid var(--border);border-radius:var(--rad);box-shadow:var(--shadow)}
+    .table-wrap{overflow:auto}
+    table{width:100%;border-collapse:collapse;font-size:.95rem}
+    thead th{position:sticky;top:0;background:var(--brand);color:#fff;text-align:left;padding:.75rem;border-bottom:1px solid var(--border)}
+    tbody td{padding:.65rem .75rem;border-bottom:1px solid var(--border)}
+    td.num{font-variant-numeric:tabular-nums;text-align:right}
+    .hint{font-size:.8rem;color:var(--muted)}
+    .banner{display:none;margin-top:.25rem;margin-bottom:.25rem;background:#fff7ed;color:#7c2d12;border:1px solid #fed7aa;padding:.6rem .75rem;border-radius:10px}
+
+    .map-wrap{height:460px;border-radius:var(--rad);overflow:hidden;border:1px solid var(--border)}
+    #map{height:100%}
+
+    footer{color:var(--muted);text-align:center;padding:1rem;font-size:.9rem}
+      .cards{display:grid;gap:.75rem;grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+    .mini-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:.75rem;box-shadow:var(--shadow)}
+    .mini-card h3{margin:.1rem 0 .4rem 0;font-size:.95rem}
+    .mini-grid{display:grid;grid-template-columns:1fr 1fr;gap:.25rem .75rem;font-size:.9rem}
+    @media (max-width:640px){main{padding:.75rem}header{padding:.6rem .8rem}h1{font-size:1rem}.map-wrap{height:380px}.btn{padding:.45rem .6rem}}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🔥 VA Fire Weather — Amelia · Nottoway · Brunswick · Dinwiddie · Greensville · Prince George</h1>
+    <nav class="menu" aria-label="Primary">
+      <button id="themeBtn" class="btn" type="button" title="Toggle night mode">🌓 Night mode</button>
+      <button id="refreshBtn" class="btn" type="button" title="Refresh now">🔄 Refresh</button>
+      <a class="btn" href="https://www.weather.gov/akq/" target="_blank" rel="noopener">NWS AKQ</a>
+    </nav>
+  </header>
+
+  <main>
+    <div id="updated" class="meta">Last updated: —</div>
+    <div id="banner" class="banner" role="status">Partial data: one or more sources failed. Displaying what we could fetch.</div>
+
+    <!-- Counties Card (mobile-first) -->
+    <section class="card" aria-label="Counties overview">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;padding:.5rem 1rem 0 1rem">
+        <h2 style="margin:.25rem 0;font-size:1rem;color:#0f172a">Counties</h2>
+        <div class="hint" style="margin-left:auto">Tap a hotspot on the map for FIRMS</div>
+      </div>
+      <div id="countyCards" class="cards" aria-live="polite" aria-busy="false" style="padding:.75rem"></div>
+    </section>
+
+    <section class="card table-wrap" aria-label="County metrics">
+      <table aria-describedby="tableHint">
+        <thead>
+          <tr>
+            <th>County</th>
+            <th class="num">Temp (°F)</th>
+            <th class="num">R.H. (%)</th>
+            <th class="num">Dew Pt (°F)</th>
+            <th class="num">Wind (mph)</th>
+            <th>Dir</th>
+            <th class="num">Hotspots (24h)</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <p id="tableHint" class="hint">Hourly NOAA/NWS forecast points per county center; dew point derived from temp + RH. Hotspots counted within ~25 km of each county center using NASA FIRMS 24‑hour feed.</p>
+    </section>
+
+    <section class="map-wrap" aria-label="NASA FIRMS hotspots map">
+      <div id="map"></div>
+    </section>
+  </main>
+
+  <footer>Data: NOAA/NWS & NASA FIRMS • Auto-refreshes hourly • Map stays bright in night mode</footer>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/@turf/turf@6/turf.min.js"></script>
+  <script>
+    // -------------------- Config --------------------
+    const COUNTIES = [
+      { name: "Amelia",        lat: 37.342, lon: -77.980 },
+      { name: "Nottoway",      lat: 37.142, lon: -78.089 },
+      { name: "Brunswick",     lat: 36.758, lon: -77.847 },
+      { name: "Dinwiddie",     lat: 37.077, lon: -77.587 },
+      { name: "Greensville",   lat: 36.686, lon: -77.542 },
+      { name: "Prince George", lat: 37.221, lon: -77.288 }
+    ];
+
+    // Conservative bbox around the six counties to limit FIRMS features
+    const BBOX = (() => {
+      const lats = COUNTIES.map(c => c.lat), lons = COUNTIES.map(c => c.lon);
+      const minLat = Math.min(...lats) - 0.5, maxLat = Math.max(...lats) + 0.5;
+      const minLon = Math.min(...lons) - 0.5, maxLon = Math.max(...lons) + 0.5;
+      return [minLon, minLat, maxLon, maxLat];
+    })();
+
+    const FIRMS_URL = "https://firms.modaps.eosdis.nasa.gov/active_fire/c6.1/geojson/MODIS_C6_1_USA_contiguous_and_Hawaii_24h.geojson";
+
+    // -------------------- State --------------------
+    let map, firmsLayer, countyLayer, inFlight = false;
+
+    // -------------------- Utils --------------------
+    const qs = (s, p=document) => p.querySelector(s);
+    const fmt = (v) => Number.isFinite(v) ? Math.round(v) : null;
+    const fmtTime = (d=new Date()) => d.toLocaleString(undefined, { hour12: true });
+
+    function dewPointF(tempF, rh){
+      if(!Number.isFinite(tempF) || !Number.isFinite(rh)) return null;
+      const T = (tempF - 32) * 5/9; // °C
+      const a = 17.625, b = 243.04; // Magnus (°C)
+      const alpha = Math.log(Math.max(1e-6, rh/100)) + (a*T)/(b+T);
+      const TdC = (b*alpha)/(a - alpha);
+      return Math.round(TdC * 9/5 + 32);
+    }
+
+    function mphFromWindStr(str){
+      if(!str) return null;
+      const nums = (str.match(/\d+/g) || []).map(n => parseInt(n,10));
+      return nums.length ? Math.max(...nums) : null;
+    }
+
+    function withTimeout(ms=12000){
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), ms);
+      const exec = (input, init={}) => fetch(input, { ...init, signal: ctrl.signal }).finally(() => clearTimeout(t));
+      return { exec, abort: () => ctrl.abort() };
+    }
+
+    async function fetchJSON(url, options={}, timeoutMs=12000){
+      const ft = withTimeout(timeoutMs);
+      const res = await ft.exec(url, options);
+      if(!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+      return res.json();
+    }
+
+    async function getHourly(lat, lon){
+      try{
+        const meta = await fetchJSON(`https://api.weather.gov/points/${lat},${lon}`);
+        const hourlyUrl = meta?.properties?.forecastHourly;
+        if(!hourlyUrl) throw new Error('No hourly URL');
+        const data = await fetchJSON(hourlyUrl);
+        const p = data?.properties?.periods?.[0];
+        if(!p) return null;
+        const temp = Number(p.temperature);
+        const rh = Number(p?.relativeHumidity?.value);
+        return {
+          tempF: Number.isFinite(temp) ? temp : null,
+          rh: Number.isFinite(rh) ? Math.round(rh) : null,
+          windStr: [p.windSpeed||'', p.windDirection||''].filter(Boolean).join(' '),
+          windMph: mphFromWindStr(p.windSpeed) ?? mphFromWindStr(p.windGust),
+          dir: p.windDirection || '—',
+          short: p.shortForecast || '—'
+        };
+      }catch(err){
+        console.warn('NOAA fetch error:', err);
+        return null;
+      }
+    }
+
+    async function getFirmsGeo(){
+      try{
+        const geo = await fetchJSON(FIRMS_URL);
+        // Filter to our bbox to reduce render weight
+        geo.features = geo.features.filter(f => {
+          const [lon, lat] = f.geometry.coordinates;
+          return lon>=BBOX[0] && lon<=BBOX[2] && lat>=BBOX[1] && lat<=BBOX[3];
+        });
+        return geo;
+      }catch(err){
+        console.warn('FIRMS fetch error:', err);
+        return { type:'FeatureCollection', features:[] };
+      }
+    }
+
+    function countHotspotsByCounty(features, radiusKm=25){
+      const counts = new Map();
+      for(const c of COUNTIES){
+        const center = turf.point([c.lon, c.lat]);
+        const circle = turf.circle(center, radiusKm, { units:'kilometers', steps:64 });
+        let n = 0;
+        for(const f of features){
+          const pt = turf.point(f.geometry.coordinates);
+          if(turf.booleanPointInPolygon(pt, circle)) n++;
+        }
+        counts.set(c.name, n);
+      }
+      return counts;
+    }
+
+    function buildFirmsUrl(lat, lon, zoom=11){
+      // Center FIRMS Map on the clicked hotspot (viewer accepts lat,lon,zoom fragment)
+      const la = lat.toFixed(3), lo = lon.toFixed(3);
+      return `https://firms.modaps.eosdis.nasa.gov/map/#t:adv;d:24hrs;@${la},${lo},${zoom}z`;
+    }
+
+    function initMap(){
+      const bounds = L.latLngBounds(COUNTIES.map(c => [c.lat, c.lon]));
+      map = L.map('map', { zoomControl:true }).fitBounds(bounds.pad(0.3));
+      // Keep map BRIGHT always (OSM standard tiles)
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution:'© OpenStreetMap contributors'
+      }).addTo(map);
+
+      // Optional: show county centers
+      countyLayer = L.layerGroup(
+        COUNTIES.map(c => L.marker([c.lat, c.lon]).bindTooltip(c.name, {permanent:false}))
+      ).addTo(map);
+    }
+
+    function renderFirmsLayer(geo){
+      if(firmsLayer){ map.removeLayer(firmsLayer); }
+      firmsLayer = L.geoJSON(geo, {
+        pointToLayer: (f, latlng) => L.circleMarker(latlng, {
+          radius: 5, color:'#ef4444', fillColor:'#ef4444', fillOpacity:0.9, weight:1
+        }),
+        onEachFeature: (f, layer) => {
+          const [lon, lat] = f.geometry.coordinates;
+          const url = buildFirmsUrl(lat, lon, 12);
+          const when = [f.properties?.acq_date, f.properties?.acq_time].filter(Boolean).join(' ');
+          layer.bindPopup(`🔥 Hotspot<br>${when || ''}<br><a href="${url}" target="_blank" rel="noopener">Open in NASA FIRMS →</a>`);
+          layer.on('click', () => window.open(url, '_blank', 'noopener'));
+        }
+      }).addTo(map);
+    }
+
+    function renderTable(rows, counts){
+      const tb = qs('#tbody');
+      const frag = document.createDocumentFragment();
+      for(let i=0;i<COUNTIES.length;i++){
+        const c = COUNTIES[i];
+        const wx = rows[i];
+        const tr = document.createElement('tr');
+        const td = (txt, cls='') => { const e=document.createElement('td'); if(cls) e.className=cls; e.textContent=txt; return e; };
+        const temp = wx?.tempF ?? null;
+        const rh = wx?.rh ?? null;
+        const dp = dewPointF(temp, rh);
+        const windMph = wx?.windMph ?? null;
+        const windDir = wx?.dir ?? '—';
+        tr.append(
+          td(c.name),
+          td(Number.isFinite(temp)? Math.round(temp) : '—', 'num'),
+          td(Number.isFinite(rh)? Math.round(rh) : '—', 'num'),
+          td(Number.isFinite(dp)? Math.round(dp) : '—', 'num'),
+          td(Number.isFinite(windMph)? Math.round(windMph) : '—', 'num'),
+          td(windDir),
+          td(String(counts.get(c.name) ?? 0), 'num')
+        );
+        frag.appendChild(tr);
+      }
+      tb.replaceChildren(frag);
+    }
+
+    function renderCountyCards(rows, counts){
+      const wrap = qs('#countyCards');
+      if(!wrap) return;
+      const frag = document.createDocumentFragment();
+      for(let i=0;i<COUNTIES.length;i++){
+        const c = COUNTIES[i];
+        const wx = rows[i] || {};
+        const temp = Number.isFinite(wx?.tempF)? Math.round(wx.tempF) : '—';
+        const rh = Number.isFinite(wx?.rh)? Math.round(wx.rh) : '—';
+        const dp = (()=>{const v=dewPointF(wx?.tempF, wx?.rh);return Number.isFinite(v)? v : '—';})();
+        const wind = Number.isFinite(wx?.windMph)? Math.round(wx.windMph) : '—';
+        const dir = wx?.dir || '—';
+        const hot = counts.get(c.name) ?? 0;
+        const card = document.createElement('div'); card.className='mini-card';
+        card.innerHTML = `
+          <h3>${c.name}</h3>
+          <div class="mini-grid">
+            <div>Temp</div><div style="text-align:right">${temp}°F</div>
+            <div>RH</div><div style="text-align:right">${rh}%</div>
+            <div>Dew Pt</div><div style="text-align:right">${dp}°F</div>
+            <div>Wind</div><div style="text-align:right">${wind} mph ${dir}</div>
+            <div>Hotspots</div><div style="text-align:right">${hot}</div>
+          </div>`;
+        frag.appendChild(card);
+      }
+      wrap.replaceChildren(frag);
+    };
+        const temp = wx?.tempF ?? null;
+        const rh = wx?.rh ?? null;
+        const dp = dewPointF(temp, rh);
+        const windMph = wx?.windMph ?? null;
+        const windDir = wx?.dir ?? '—';
+        tr.append(
+          td(c.name),
+          td(Number.isFinite(temp)? Math.round(temp) : '—', 'num'),
+          td(Number.isFinite(rh)? Math.round(rh) : '—', 'num'),
+          td(Number.isFinite(dp)? Math.round(dp) : '—', 'num'),
+          td(Number.isFinite(windMph)? Math.round(windMph) : '—', 'num'),
+          td(windDir),
+          td(String(counts.get(c.name) ?? 0), 'num')
+        );
+        frag.appendChild(tr);
+      }
+      tb.replaceChildren(frag);
+    }
+
+    async function refreshAll(){
+      if(inFlight) return; inFlight = true;
+      qs('#updated').textContent = `Last updated: ${fmtTime()}`;
+      const banner = qs('#banner'); banner.style.display = 'none';
+      try{
+        const [geo, results] = await Promise.all([
+          getFirmsGeo(),
+          Promise.allSettled(COUNTIES.map(c => getHourly(c.lat, c.lon)))
+        ]);
+        const rows = results.map(r => r.status==='fulfilled' ? r.value : null);
+        const counts = countHotspotsByCounty(geo.features, 25);
+        renderFirmsLayer(geo);
+        renderCountyCards(rows, counts);
+        renderTable(rows, counts);
+        if(rows.some(r => r===null)) banner.style.display = 'block';
+      }catch(err){
+        console.warn('Refresh error', err);
+        banner.style.display = 'block';
+      }finally{
+        inFlight = false;
+      }
+    }
+
+    function initTheme(){
+      const saved = (()=>{try{return localStorage.getItem('ffwx:theme');}catch{return null}})();
+      if(saved === 'dark') document.documentElement.dataset.theme = 'dark';
+      qs('#themeBtn').addEventListener('click', () => {
+        const isDark = document.documentElement.dataset.theme === 'dark';
+        if(isDark){ document.documentElement.removeAttribute('data-theme'); localStorage.setItem('ffwx:theme',''); }
+        else{ document.documentElement.dataset.theme = 'dark'; localStorage.setItem('ffwx:theme','dark'); }
+      });
+    }
+
+    // -------------------- Boot --------------------
+    document.getElementById('refreshBtn').addEventListener('click', refreshAll);
+    initTheme();
+    initMap();
+    refreshAll();
+    // Auto-refresh every hour
+    setInterval(refreshAll, 60*60*1000);
+  </script>
+</body>
+</html>
