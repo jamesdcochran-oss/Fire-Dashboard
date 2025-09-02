@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>🔥 Five Forks Fire Weather</title>
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+
+  <!-- Turf -->
+  <script src="https://unpkg.com/@turf/turf@6/turf.min.js" defer></script>
+
+  <!-- MarkerCluster -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css" />
+  <script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js" defer></script>
+
+  <style>
+    body { margin:0; font-family: system-ui, sans-serif; background:#0f172a; color:#e5e7eb; }
+    header { background:#3b82f6; color:#fff; padding:.75rem 1rem; display:flex; justify-content:space-between; flex-wrap:wrap; }
+    h1 { margin:0; font-size:1rem; }
+    .btn { background:#fff; border:1px solid #ccc; border-radius:9999px; padding:.3rem .6rem; cursor:pointer; }
+    main { display:grid; gap:1rem; padding:1rem; }
+    .cards { display:grid; gap:1rem; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); }
+    .card { background:#111827; border:1px solid #334155; border-radius:14px; padding:.9rem; }
+    .meta { font-size:.8rem; color:#9ca3af; text-align:right; }
+    .map-wrap { height:520px; border-radius:14px; overflow:hidden; border:1px solid #334155; }
+    .pill { display:inline-flex; align-items:center; gap:.35rem; padding:.25rem .5rem; border-radius:9999px; background:#fff; color:#111; font-size:.75rem; }
+    .ok { color:#10b981; border-color:#10b981; }
+    .warn { color:#f59e0b; border-color:#f59e0b; }
+    .err { color:#ef4444; border-color:#ef4444; }
+    .flags { margin-top:.4rem; font-size:.8rem; font-weight:700; color:#ef4444; }
+    .marker-cluster-small { background: rgba(239,68,68,0.8); }
+    .marker-cluster-medium { background: rgba(249,115,22,0.8); }
+    .marker-cluster-large { background: rgba(202,138,4,0.8); }
+    .marker-cluster div { color:#fff; text-shadow:0 0 2px black; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🔥 Five Forks Fire Weather</h1>
+    <div>
+      <button id="unitBtn" class="btn">°F</button>
+      <button id="refreshBtn" class="btn">🔄 Refresh</button>
+      <span id="statusPill" class="pill">—</span>
+    </div>
+  </header>
+
+  <main>
+    <div id="updated" class="meta">Last updated: —</div>
+    <section id="cards" class="cards"></section>
+    <section class="map-wrap"><div id="map"></div></section>
+  </main>
+
+  <footer style="text-align:center; color:#9ca3af; padding:1rem">
+    Data: NOAA &amp; NASA FIRMS (API) • Updates hourly
+  </footer>
+
+<script>
+const COUNTIES = [
+  { name: "Amelia",        lat: 37.342, lon: -77.980 },
+  { name: "Nottoway",      lat: 37.142, lon: -78.089 },
+  { name: "Dinwiddie",     lat: 37.077, lon: -77.587 },
+  { name: "Prince George", lat: 37.221, lon: -77.288 },
+  { name: "Brunswick",     lat: 36.758, lon: -77.847 },
+  { name: "Greensville",   lat: 36.686, lon: -77.542 }
+];
+
+// 🔑 FIRMS API key URLs
+const FIRMS_SOURCES = [
+  "https://firms.modaps.eosdis.nasa.gov/api/area/geojson/01e7d5c7c7cd67df54a0e6f08c21e6ab/VIIRS_SNPP_NRT/USA_contiguous_and_Hawaii/24h",
+  "https://firms.modaps.eosdis.nasa.gov/api/area/geojson/01e7d5c7c7cd67df54a0e6f08c21e6ab/MODIS_NRT/USA_contiguous_and_Hawaii/24h"
+];
+
+let unit = "F";
+const $ = s => document.querySelector(s);
+
+function toC(f) { return Math.round((f-32)*5/9); }
+function parseWindMph(s){ const nums=(s||"").match(/\d+/g)||[]; return nums.length?Math.max(...nums.map(n=>+n)):null; }
+function flags303030(tempF, rh, windStr){
+  const tempC=(tempF-32)*5/9; const windMph=parseWindMph(windStr);
+  const within=(tempC>=30&&rh<=30&&windMph>=18);
+  const near=!within && ( (tempC>=28?1:0)+(rh<=33?1:0)+(windMph>=16?1:0) )>=2;
+  return {within,near};
+}
+
+async function fetchWeather(lat, lon){
+  try{
+    const meta=await fetch(`https://api.weather.gov/points/${lat},${lon}`,{headers:{Accept:"application/geo+json"}});
+    const m=await meta.json();
+    const hourly=m.properties.forecastHourly;
+    const data=await fetch(hourly,{headers:{Accept:"application/geo+json"}});
+    const j=await data.json();
+    const p=j.properties.periods[0];
+    return {
+      tempF:p.temperature,
+      rh:p.relativeHumidity?.value,
+      dpC:p.dewpoint?.value,
+      wind:`${p.windSpeed} ${p.windDirection}`,
+      short:p.shortForecast
+    };
+  }catch(e){console.warn("NOAA fail",e);return null;}
+}
+
+async function fetchFirms(){
+  const seen=new Set(), out=[];
+  for(const url of FIRMS_SOURCES){
+    try{
+      const res=await fetch(url);
+      const j=await res.json();
+      for(const f of j.features||[]){
+        if(f.geometry?.type==="Point"){
+          const [x,y]=f.geometry.coordinates;
+          const key=`${x.toFixed(3)},${y.toFixed(3)}`;
+          if(!seen.has(key)){ seen.add(key); out.push(f); }
+        }
+      }
+    }catch(e){console.warn("FIRMS fail",e);}
+  }
+  return {type:"FeatureCollection",features:out};
+}
+
+function renderCard(name,wx,hotspots){
+  const tempF=wx?.tempF??null;
+  const tempText=tempF?(unit==="C"?toC(tempF)+"°C":Math.round(tempF)+"°F"):"—";
+  const rh=wx?.rh!=null?Math.round(wx.rh):null;
+  const rhText=rh!=null?`${rh}% RH`:"—% RH";
+  const dp=wx?.dpC!=null?(unit==="C"?Math.round(wx.dpC)+"°C":Math.round(wx.dpC*9/5+32)+"°F"):"—";
+  const f3030=wx?flags303030(tempF,rh,wx.wind):{within:false,near:false};
+  const flags=f3030.within?"🔥 30/30/30":f3030.near?"⚠️ Near 30/30/30":"";
+  return `<div class="card"><strong>${name}</strong><br>${tempText} · ${rhText} · DP ${dp} · ${wx?.wind||"—"}<br>${wx?.short||"Weather unavailable"} · 🔥 ${hotspots}<div class="flags">${flags}</div></div>`;
+}
+
+let map,firmsCluster;
+function ensureMap(firms){
+  if(!map){
+    map=L.map("map").setView([37.1,-77.5],8);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap"}).addTo(map);
+    firmsCluster=L.markerClusterGroup(); map.addLayer(firmsCluster);
+  }
+  firmsCluster.clearLayers();
+  L.geoJSON(firms,{pointToLayer:(f,latlng)=>{
+    const c=(f.properties.confidence||"").toLowerCase();
+    let color="#ffa500"; if(c.includes("low"))color="#facc15"; else if(c.includes("high"))color="#ef4444";
+    return L.circleMarker(latlng,{radius:6,fillColor:color,color,weight:1,opacity:1,fillOpacity:.8})
+      .bindPopup(`🔥 Fire detected<br>Conf: ${f.properties.confidence||"n/a"}<br>Date: ${f.properties.acq_date||"n/a"}`);
+  }}).addTo(firmsCluster);
+}
+
+async function refresh(){
+  $("#statusPill").textContent="Loading…"; $("#refreshBtn").disabled=true;
+  try{
+    const [firms,wx]=await Promise.all([fetchFirms(),Promise.all(COUNTIES.map(c=>fetchWeather(c.lat,c.lon)))]);
+    let frag=""; COUNTIES.forEach((c,i)=>{
+      const hs=turf.pointsWithinPolygon(
+        turf.points(firms.features.map(f=>f.geometry.coordinates)),
+        turf.circle([c.lon,c.lat],30,{units:"kilometers"})
+      ).features.length;
+      frag+=renderCard(c.name,wx[i],hs);
+    });
+    $("#cards").innerHTML=frag;
+    ensureMap(firms);
+    $("#updated").textContent="Last updated: "+new Date().toLocaleString();
+    $("#statusPill").textContent=wx.some(w=>!w)?"Partial":"Fresh";
+  }catch(e){
+    console.warn("Refresh fail",e);
+    $("#statusPill").textContent="Error";
+  }finally{
+    $("#refreshBtn").disabled=false;
+  }
+}
+
+$("#unitBtn").addEventListener("click",()=>{unit=(unit==="F"?"C":"F");$("#unitBtn").textContent="°"+unit;refresh();});
+$("#refreshBtn").addEventListener("click",refresh);
+refresh();
+setInterval(refresh,60*60*1000);
+</script>
+</body>
+</html>
