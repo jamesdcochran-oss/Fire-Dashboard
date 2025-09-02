@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AKQ + FIRMS Fire Weather Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+    #app { display: grid; grid-template-columns: 360px 1fr; grid-template-rows: 56px 1fr; height: 100%; }
+    header { grid-column: 1 / span 2; display:flex; align-items:center; justify-content:space-between; padding: 8px 12px; background: #0f172a; color: #e2e8f0; }
+    header .title { font-weight: 700; letter-spacing: .2px; }
+    header .actions { display:flex; gap: 8px; }
+    .btn { border: 0; border-radius: 10px; padding: 8px 12px; background: #1f2937; color: #e5e7eb; cursor: pointer; }
+    .btn:hover { filter: brightness(1.1); }
+    aside { border-right: 1px solid #e5e7eb; overflow: auto; }
+    .panel { padding: 12px; }
+    .section-title { font-size: 12px; font-weight: 700; text-transform: uppercase; color: #475569; letter-spacing: .5px; margin: 12px 0 6px; }
+    .small { font-size: 12px; color: #64748b; }
+    .kpi { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .card { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 14px; padding: 10px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+    #map { height: 100%; width: 100%; }
+    .legend { background: white; padding: 8px 10px; border-radius: 10px; border: 1px solid #e5e7eb; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+    .forecast-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+    .forecast-item { display:flex; align-items:center; justify-content:space-between; border: 1px dashed #e5e7eb; padding: 6px 8px; border-radius: 10px; }
+    .badge { border-radius: 999px; padding: 2px 8px; font-size: 12px; }
+    .badge.risk-low { background: #ecfeff; color: #155e75; }
+    .badge.risk-high { background: #fee2e2; color: #991b1b; }
+    .footer { margin-top: 10px; font-size: 12px; color: #64748b; }
+    .error { color: #b91c1c; font-weight: 600; }
+    .muted { color: #64748b; }
+    .row { display:flex; align-items:center; gap: 8px; }
+    .switch { display:flex; gap:6px; flex-wrap:wrap; }
+    .switch button { font-size: 12px; background:#f1f5f9; color:#0f172a; border:1px solid #e2e8f0; }
+    .switch button.active { background:#0ea5e9; color:white; border-color:#0ea5e9; }
+    @media (max-width: 900px) {
+      #app { grid-template-columns: 1fr; grid-template-rows: 56px 300px 1fr; }
+      aside { grid-row: 3; }
+      #map { grid-row: 2; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <header>
+      <div class="title">🔥 AKQ + NASA FIRMS — Fire Weather (VA focus)</div>
+      <div class="actions">
+        <button id="locateBtn" class="btn">📍 Use my location</button>
+        <button id="refreshBtn" class="btn">🔄 Refresh</button>
+      </div>
+    </header>
+    <aside>
+      <div class="panel">
+        <div class="section-title">Focus counties</div>
+        <div class="small">Amelia · Nottoway · Dinwiddie · Prince George · Brunswick · Greensville</div>
+
+        <div class="section-title">Active layers</div>
+        <div class="switch" id="layerSwitch"></div>
+        <div class="small">FIRMS requires a free <strong>MAP_KEY</strong>. Add yours below.</div>
+        <div class="row" style="margin-top:6px">
+          <input id="mapKey" type="password" placeholder="FIRMS MAP_KEY" style="flex:1; padding:8px 10px; border-radius: 10px; border:1px solid #e5e7eb;">
+          <button class="btn" id="applyKey">Apply</button>
+        </div>
+
+        <div class="section-title">Point forecast (NWS Hourly)</div>
+        <div id="forecastPanel" class="card">
+          <div class="muted">Click the map to fetch hourly forecast from api.weather.gov…</div>
+        </div>
+
+        <div class="section-title">VA Alerts (NWS)</div>
+        <div id="alertsPanel" class="card">
+          <div class="muted">Loading active alerts…</div>
+        </div>
+
+        <div class="footer">
+          Data: NASA FIRMS (MODIS/VIIRS) · NWS AKQ (api.weather.gov). Times are local.
+        </div>
+      </div>
+    </aside>
+    <div id="map"></div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // --- Map init (center near SE Virginia per user's coords) ---
+    const CENTER = [36.95, -77.50];
+    const map = L.map('map', { zoomControl: true }).setView(CENTER, 10);
+
+    const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    // --- FIRMS WMS layers ---
+    let MAP_KEY = localStorage.getItem('FIRMS_MAP_KEY') || '01e7d5c7c7cd67df54a0e6f08c21e6ab';
+if (!localStorage.getItem('FIRMS_MAP_KEY')) {
+  localStorage.setItem('FIRMS_MAP_KEY', MAP_KEY);
+}
+    const layerSwitch = document.getElementById('layerSwitch');
+    const firmsBase = () => `https://firms.modaps.eosdis.nasa.gov/mapserver/wms/fires/${MAP_KEY}/?`;
+
+    // Define typical FIRMS layers (24h)
+    const firmsConfigs = [
+      { id: 'viirs24', name: 'VIIRS 24h', params: { layers: 'fires_viirs_24', format: 'image/png', transparent: true, version: '1.1.1' } },
+      { id: 'modis24', name: 'MODIS 24h', params: { layers: 'fires_modis_24', format: 'image/png', transparent: true, version: '1.1.1' } },
+      { id: 'tsd4_all', name: 'Time Since Detect (VIIRS, 4 colors)', params: { layers: 'tsd_4_viirs_all', format: 'image/png', transparent: true, version: '1.1.1' } }
+    ];
+
+    const firmsLayers = new Map();
+
+    function makeFirmsLayer(cfg) {
+      return L.tileLayer.wms(firmsBase(), cfg.params);
+    }
+
+    function rebuildFirmsLayers() {
+      // Remove all
+      firmsLayers.forEach(l => map.removeLayer(l));
+      firmsLayers.clear();
+      layerSwitch.innerHTML = '';
+      // Build new with current MAP_KEY
+      firmsConfigs.forEach(cfg => {
+        const lyr = makeFirmsLayer(cfg);
+        firmsLayers.set(cfg.id, lyr);
+        // Toggle buttons
+        const btn = document.createElement('button');
+        btn.className = 'btn';
+        btn.textContent = cfg.name;
+        btn.onclick = () => {
+          if (map.hasLayer(lyr)) { map.removeLayer(lyr); btn.classList.remove('active'); }
+          else { lyr.addTo(map); btn.classList.add('active'); }
+        };
+        layerSwitch.appendChild(btn);
+        if (cfg.id === 'viirs24' && MAP_KEY) { lyr.addTo(map); btn.classList.add('active'); }
+      });
+    }
+
+    rebuildFirmsLayers();
+
+    // Persist / apply key
+    const keyInput = document.getElementById('mapKey');
+    const applyKeyBtn = document.getElementById('applyKey');
+    keyInput.value = MAP_KEY;
+    applyKeyBtn.addEventListener('click', () => {
+      MAP_KEY = keyInput.value.trim();
+      if (!MAP_KEY) { alert('Enter your FIRMS MAP_KEY first.'); return; }
+      localStorage.setItem('FIRMS_MAP_KEY', MAP_KEY);
+      rebuildFirmsLayers();
+    });
+
+    // --- VA Alerts overlay (polygons/areas) ---
+    const alertsPanel = document.getElementById('alertsPanel');
+    let alertsLayer = L.geoJSON(null, {
+      style: { color: '#ef4444', weight: 2, opacity: 0.9, fillOpacity: 0.08 }
+    }).addTo(map);
+
+    async function loadVAAlerts() {
+      try {
+        alertsPanel.innerHTML = '<div class="muted">Fetching active alerts…</div>';
+        const res = await fetch('https://api.weather.gov/alerts/active?area=VA', {
+          headers: { 'User-Agent': 'akq-firms-demo (contact@example.com)' }
+        });
+        const data = await res.json();
+        alertsLayer.clearLayers();
+        let count = 0;
+        if (data && data.features) {
+          data.features.forEach(f => {
+            if (f.geometry) { alertsLayer.addData(f); count++; }
+          });
+        }
+        alertsPanel.innerHTML = count
+          ? `<div class="small">Active alerts in VA: <strong>${count}</strong></div>`
+          : '<div class="muted">No active alerts for VA.</div>';
+      } catch (err) {
+        console.error(err);
+        alertsPanel.innerHTML = '<div class="error">Failed to load alerts.</div>';
+      }
+    }
+    loadVAAlerts();
+
+    // --- NWS Hourly forecast on click ---
+    const forecastPanel = document.getElementById('forecastPanel');
+
+    function localTime(iso) {
+      try { return new Date(iso).toLocaleString([], { hour: 'numeric', minute: '2-digit' }); } catch { return iso; }
+    }
+
+    async function getHourlyForecast(lat, lon) {
+      const UA = { 'User-Agent': 'akq-firms-demo (contact@example.com)' };
+      const p = await fetch(`https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}`, { headers: UA });
+      const pjson = await p.json();
+      const hourlyUrl = pjson?.properties?.forecastHourly;
+      const office = pjson?.properties?.cwa;
+      if (!hourlyUrl) throw new Error('forecastHourly URL missing');
+      const h = await fetch(hourlyUrl, { headers: UA });
+      const hjson = await h.json();
+      const periods = hjson?.properties?.periods || [];
+      return { office, periods };
+    }
+
+    function renderForecast({ office, periods }) {
+      if (!periods.length) { forecastPanel.innerHTML = '<div class="muted">No hourly data returned.</div>'; return; }
+      const next = periods.slice(0, 12);
+      const items = next.map(p => `
+        <li class="forecast-item">
+          <span class="small">${localTime(p.startTime)}</span>
+          <span>${p.temperature}°${p.temperatureUnit}</span>
+          <span class="small">RH ${p.relativeHumidity?.value ?? '–'}%</span>
+          <span class="small">Wind ${p.windSpeed} ${p.windDirection || ''}</span>
+        </li>`).join('');
+      forecastPanel.innerHTML = `
+        <div class="small">Office: <strong>${office}</strong> · Next 12 hours</div>
+        <ul class="forecast-list">${items}</ul>
+      `;
+    }
+
+    map.on('click', async (e) => {
+      forecastPanel.innerHTML = '<div class="muted">Fetching hourly forecast…</div>';
+      try {
+        const { lat, lng } = e.latlng;
+        const data = await getHourlyForecast(lat, lng);
+        renderForecast(data);
+      } catch (err) {
+        console.error(err);
+        forecastPanel.innerHTML = '<div class="error">Failed to fetch forecast.</div>';
+      }
+    });
+
+    // --- convenience buttons ---
+    document.getElementById('refreshBtn').addEventListener('click', () => {
+      loadVAAlerts();
+      // Re-request visible FIRMS tiles by nudging the map
+      const z = map.getZoom();
+      map.setZoom(z);
+    });
+
+    document.getElementById('locateBtn').addEventListener('click', () => {
+      if (!navigator.geolocation) { alert('Geolocation not supported'); return; }
+      navigator.geolocation.getCurrentPosition((pos) => {
+        const { latitude, longitude } = pos.coords;
+        map.setView([latitude, longitude], 11);
+      }, (err) => alert('Location error: ' + err.message));
+    });
+
+    // --- Optional: highlight the six focus counties (rough bbox for now) ---
+    // For production, replace with county polygons (TIGER/Line or VA DOF). This is just a subtle visual cue.
+    const focusBounds = L.latLngBounds([[36.6, -78.0], [37.5, -77.0]]);
+    L.rectangle(focusBounds, { color: '#0ea5e9', weight: 1, fillOpacity: 0.03 }).addTo(map);
+
+  </script>
+</body>
+</html>
