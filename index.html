@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Five Forks Fire Weather Dashboard</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    :root{
+      --bg:#0f172a;--fg:#e2e8f0;--muted:#64748b;--line:#e5e7eb;--accent:#0ea5e9;
+    }
+    html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+    #app { display: grid; grid-template-areas: 'header header' 'aside map'; grid-template-columns: 340px 1fr; grid-template-rows: 56px 1fr; height: 100%; }
+    header { grid-area: header; display:flex; align-items:center; justify-content:space-between; padding: 8px 12px; background: var(--bg); color: var(--fg); }
+    header .title { font-weight: 700; letter-spacing: .2px; }
+    header .actions { display:flex; gap: 8px; }
+    .btn { border: 0; border-radius: 10px; padding: 6px 10px; background: #1f2937; color: #e5e7eb; cursor: pointer; font-size: 13px; }
+    .btn:hover { filter: brightness(1.1); }
+    aside { grid-area: aside; border-right: 1px solid var(--line); overflow-y: auto; }
+    .panel { padding: 10px; }
+    .section-title { font-size: 12px; font-weight: 700; text-transform: uppercase; color: #475569; letter-spacing: .5px; margin: 10px 0 6px; }
+    .small { font-size: 12px; color: var(--muted); }
+    .card { background: #ffffff; border: 1px solid var(--line); border-radius: 14px; padding: 8px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+    #map { grid-area: map; height: 100%; width: 100%; }
+    .forecast-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
+    .forecast-item { display:flex; align-items:center; justify-content:space-between; border: 1px dashed var(--line); padding: 4px 6px; border-radius: 8px; font-size: 12px; }
+    .footer { margin-top: 8px; font-size: 11px; color: var(--muted); }
+    .error { color: #b91c1c; font-weight: 600; }
+    .muted { color: var(--muted); }
+    .row { display:flex; align-items:center; gap: 6px; }
+    .switch { display:flex; gap:6px; flex-wrap:wrap; }
+    .switch button { font-size: 12px; background:#f1f5f9; color:#0f172a; border:1px solid #e2e8f0; padding: 6px 8px; border-radius: 8px; }
+    .switch button.active { background:var(--accent); color:white; border-color:var(--accent); }
+
+    /* Mobile-first stack: Map on top, cards below */
+    @media (max-width: 900px) {
+      #app { grid-template-areas: 'header' 'map' 'aside'; grid-template-columns: 1fr; grid-template-rows: 52px 60vh auto; }
+      aside { border-right: 0; border-top: 1px solid var(--line); }
+      .panel { padding: 12px; }
+      .switch button { flex: 1 1 auto; }
+      .stack { display:grid; gap:10px; }
+      details.card { padding: 0; }
+      details.card > summary { list-style: none; cursor: pointer; padding: 10px 12px; border-bottom: 1px solid var(--line); font-weight:600; }
+      details.card[open] > summary { border-bottom-color: transparent; }
+      details.card .content { padding: 10px 12px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <header>
+      <div class="title">🔥 Five Forks Fire Weather Dashboard</div>
+      <div class="actions">
+        <button id="locateBtn" class="btn">📍 Location</button>
+        <button id="refreshBtn" class="btn">🔄 Refresh</button>
+      </div>
+    </header>
+
+    <aside>
+      <div class="panel stack">
+        <div class="small">Amelia · Nottoway · Dinwiddie · Prince George · Brunswick · Greensville</div>
+
+        <details class="card" open>
+          <summary>🔥 Active layers (FIRMS)</summary>
+          <div class="content">
+            <div class="switch" id="layerSwitch"></div>
+            <div class="small" style="margin-top:6px">Using embedded MAP_KEY for public viewing.</div>
+          </div>
+        </details>
+
+        <details class="card" open>
+          <summary>🕒 Point forecast (NWS Hourly)</summary>
+          <div class="content" id="forecastPanel">
+            <div class="muted">Tap the map to fetch the next hours…</div>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary>⚠️ VA Alerts (NWS)</summary>
+          <div class="content" id="alertsPanel">
+            <div class="muted">Loading active alerts…</div>
+          </div>
+        </details>
+
+        <div class="footer">Data: NASA FIRMS (MODIS/VIIRS) · NWS AKQ (api.weather.gov). Times are local.</div>
+      </div>
+    </aside>
+
+    <div id="map"></div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // --- Map init ---
+    const CENTER = [36.95, -77.50];
+    const map = L.map('map').setView(CENTER, 10);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+
+    // --- FIRMS layers with embedded MAP_KEY ---
+    const MAP_KEY = '01e7d5c7c7cd67df54a0e6f08c21e6ab';
+    const firmsBase = () => `https://firms.modaps.eosdis.nasa.gov/mapserver/wms/fires/${MAP_KEY}/?`;
+    const layerSwitch = document.getElementById('layerSwitch');
+
+    const firmsConfigs = [
+      { id: 'viirs24', name: 'VIIRS 24h', params: { layers: 'fires_viirs_24', format: 'image/png', transparent: true, version: '1.1.1' } },
+      { id: 'modis24', name: 'MODIS 24h', params: { layers: 'fires_modis_24', format: 'image/png', transparent: true, version: '1.1.1' } },
+      { id: 'tsd4_all', name: 'Time Since Detect', params: { layers: 'tsd_4_viirs_all', format: 'image/png', transparent: true, version: '1.1.1' } }
+    ];
+
+    const firmsLayers = new Map();
+    function makeFirmsLayer(cfg) { return L.tileLayer.wms(firmsBase(), cfg.params); }
+    function buildFirmsLayers() {
+      firmsConfigs.forEach(cfg => {
+        const lyr = makeFirmsLayer(cfg);
+        firmsLayers.set(cfg.id, lyr);
+        const btn = document.createElement('button');
+        btn.textContent = cfg.name;
+        btn.onclick = () => {
+          if (map.hasLayer(lyr)) { map.removeLayer(lyr); btn.classList.remove('active'); }
+          else { lyr.addTo(map); btn.classList.add('active'); }
+        };
+        layerSwitch.appendChild(btn);
+        if (cfg.id === 'viirs24') { lyr.addTo(map); btn.classList.add('active'); }
+      });
+    }
+    buildFirmsLayers();
+
+    // --- VA Alerts overlay ---
+    const alertsPanel = document.getElementById('alertsPanel');
+    let alertsLayer = L.geoJSON(null, { style: { color: '#ef4444', weight: 2, opacity: 0.9, fillOpacity: 0.08 } }).addTo(map);
+
+    async function loadVAAlerts() {
+      try {
+        alertsPanel.innerHTML = '<div class="muted">Fetching alerts…</div>';
+        const res = await fetch('https://api.weather.gov/alerts/active?area=VA');
+        const data = await res.json();
+        alertsLayer.clearLayers();
+        let count = 0;
+        if (data.features) { data.features.forEach(f => { if (f.geometry) { alertsLayer.addData(f); count++; } }); }
+        alertsPanel.innerHTML = count ? `<div class="small">Active alerts in VA: <strong>${count}</strong></div>` : '<div class="muted">No active alerts.</div>';
+      } catch {
+        alertsPanel.innerHTML = '<div class="error">Failed to load alerts.</div>';
+      }
+    }
+    loadVAAlerts();
+
+    // --- NWS Hourly forecast on click ---
+    const forecastPanel = document.getElementById('forecastPanel');
+    function localTime(iso) { return new Date(iso).toLocaleString([], { hour: 'numeric' }); }
+
+    async function getHourlyForecast(lat, lon) {
+      const p = await fetch(`https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}`);
+      const pjson = await p.json();
+      const hourlyUrl = pjson?.properties?.forecastHourly;
+      if (!hourlyUrl) throw new Error('forecastHourly URL missing');
+      const h = await fetch(hourlyUrl);
+      const hjson = await h.json();
+      return hjson?.properties?.periods || [];
+    }
+
+    function renderForecast(periods) {
+      if (!periods.length) { forecastPanel.innerHTML = '<div class="muted">No data.</div>'; return; }
+      const next = periods.slice(0, 8);
+      const items = next.map(p => `
+        <li class="forecast-item">
+          <span>${localTime(p.startTime)}</span>
+          <span>${p.temperature}°${p.temperatureUnit}</span>
+          <span>RH ${p.relativeHumidity?.value ?? '–'}%</span>
+          <span>${p.windSpeed}</span>
+        </li>`).join('');
+      forecastPanel.innerHTML = `<ul class="forecast-list">${items}</ul>`;
+    }
+
+    map.on('click', async (e) => {
+      forecastPanel.innerHTML = '<div class="muted">Loading…</div>';
+      try {
+        const { lat, lng } = e.latlng;
+        const data = await getHourlyForecast(lat, lng);
+        renderForecast(data);
+      } catch { forecastPanel.innerHTML = '<div class="error">Forecast error.</div>'; }
+    });
+
+    // Buttons
+    document.getElementById('refreshBtn').onclick = () => { loadVAAlerts(); };
+    document.getElementById('locateBtn').onclick = () => {
+      if (!navigator.geolocation) return alert('Not supported');
+      navigator.geolocation.getCurrentPosition(pos => {
+        map.setView([pos.coords.latitude, pos.coords.longitude], 11);
+      });
+    };
+
+    // Focus bounds highlight
+    const focusBounds = L.latLngBounds([[36.6, -78.0], [37.5, -77.0]]);
+    L.rectangle(focusBounds, { color: varAccent(), weight: 1, fillOpacity: 0.03 }).addTo(map);
+
+    function varAccent(){ return getComputedStyle(document.documentElement).getPropertyValue('--accent') || '#0ea5e9'; }
+  </script>
+</body>
+</html>
