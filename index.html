@@ -152,29 +152,45 @@
     }
     byId('firmsBtn').addEventListener('click', (e)=>{ e.preventDefault(); openFirmsMap(); });
 
-    // --- FIRMS layers (quick buttons) ---
-    const MAP_KEY = '01e7d5c7c7cd67df54a0e6f08c21e6ab';
-    const firmsBase = () => `https://firms.modaps.eosdis.nasa.gov/mapserver/wms/fires/${MAP_KEY}/?`;
-    const FIRMS = [
-      { id:'viirs24', name:'VIIRS 24h', params:{ layers:'fires_viirs_24', format:'image/png', transparent:true, version:'1.1.1' }},
-      { id:'modis24', name:'MODIS 24h', params:{ layers:'fires_modis_24', format:'image/png', transparent:true, version:'1.1.1' }},
-      { id:'tsd', name:'Time Since', params:{ layers:'tsd_4_viirs_all', format:'image/png', transparent:true, version:'1.1.1' }},
-    ];
-    const layers = new Map();
-    function addLayer(cfg){ return L.tileLayer.wms(firmsBase(), cfg.params); }
-    function buildQuickLayers(){
-      const bar = byId('quickLayers'); if(!bar) return;
-      bar.innerHTML='';
-      FIRMS.forEach(cfg=>{
-        const b = document.createElement('button'); b.className='btn'; b.style.minHeight='36px'; b.textContent=cfg.name;
-        const lyr = addLayer(cfg); layers.set(cfg.id, lyr);
-        b.onclick = ()=>{ if(map.hasLayer(lyr)){ map.removeLayer(lyr); b.classList.remove('active'); } else { lyr.addTo(map); b.classList.add('active'); } };
-        bar.appendChild(b);
-        if(cfg.id==='viirs24'){ lyr.addTo(map); b.classList.add('active'); }
-      });
-    }
-    buildQuickLayers();
-    window.addEventListener('load', buildQuickLayers); // safety: attach again after full load
+   // --- FIRMS layers (quick buttons) ---
+const MAP_KEY = '01e7d5c7c7cd67df54a0e6f08c21e6ab';
+const firmsBase = () => `https://firms.modaps.eosdis.nasa.gov/mapserver/wms/fires/${MAP_KEY}/?`;
+const FIRMS = [
+  { id:'viirs24', name:'VIIRS 24h', params:{ layers:'fires_viirs_24', format:'image/png', transparent:true, version:'1.1.1' }},
+  { id:'modis24', name:'MODIS 24h', params:{ layers:'fires_modis_24', format:'image/png', transparent:true, version:'1.1.1' }},
+  { id:'tsd',    name:'Time Since', params:{ layers:'tsd_4_viirs_all', format:'image/png', transparent:true, version:'1.1.1' }},
+];
+
+const layers = new Map(); // id -> L.TileLayer.WMS
+
+function addLayer(cfg){ return L.tileLayer.wms(firmsBase(), cfg.params); }
+
+function buildQuickLayers(){
+  const bar = byId('quickLayers'); if (!bar) return;
+
+  // Clean up any previously-added overlays (prevents duplicates)
+  layers.forEach(lyr => { if (map.hasLayer(lyr)) map.removeLayer(lyr); });
+  layers.clear();
+
+  bar.innerHTML = '';
+  FIRMS.forEach(cfg => {
+    const b = document.createElement('button');
+    b.className = 'btn'; b.style.minHeight = '36px'; b.textContent = cfg.name;
+
+    const lyr = addLayer(cfg); layers.set(cfg.id, lyr);
+
+    b.onclick = () => {
+      if (map.hasLayer(lyr)) { map.removeLayer(lyr); b.classList.remove('active'); }
+      else { lyr.addTo(map); b.classList.add('active'); }
+    };
+
+    bar.appendChild(b);
+    if (cfg.id === 'viirs24') { lyr.addTo(map); b.classList.add('active'); }
+  });
+}
+buildQuickLayers();
+
+   
 
     // --- Alerts ---
     const alertsPanel = byId('alertsPanel');
