@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Five Forks Fire Weather Dashboard</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    :root{
+      --bg:#0f172a;--fg:#e2e8f0;--muted:#8aa0bf;--line:#e5e7eb;--accent:#0ea5e9;
+      --chipbg:#0e1627;--chipbr:#243044;--cardbg:#0f182c;--cardbr:#22314a;
+      --touch:44px;
+    }
+    html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
+
+    /* Layout */
+    #app { display:grid; grid-template-areas:
+      'header header'
+      'toolbar toolbar'
+      'map aside';
+      grid-template-columns: 1fr 420px; grid-template-rows: 56px auto 1fr; height:100%; }
+
+    header { grid-area: header; display:flex; align-items:center; justify-content:space-between; padding:8px 12px; background:var(--bg); color:var(--fg); position:sticky; top:0; z-index:5; }
+    header .title { font-weight:700; letter-spacing:.2px; }
+    header .actions { display:flex; gap:8px; }
+    .btn { border:0; border-radius:12px; padding:10px 12px; background:#1f2937; color:#e5e7eb; cursor:pointer; font-size:13px; text-decoration:none; display:inline-flex; align-items:center; gap:6px; min-height:var(--touch); }
+    .btn:hover { filter:brightness(1.1); }
+
+    /* Toolbar: DATA-FIRST */
+    #toolbar { grid-area: toolbar; border-bottom:1px solid var(--line); background:#0a0f1d; padding:10px 12px; }
+
+    /* County chips row (compact) */
+    .chip-row { display:flex; gap:8px; overflow-x:auto; scrollbar-width:thin; }
+    .chip { flex:0 0 auto; display:flex; align-items:center; gap:8px; border:1px solid var(--chipbr); color:#d7e3f7; background:linear-gradient(180deg,var(--chipbg),#0a1120); padding:8px 10px; border-radius:999px; min-height:var(--touch); min-width:132px; cursor:pointer; }
+    .chip .name { font-weight:700; letter-spacing:.1px; }
+    .chip .met { font-size:12px; color:var(--muted); }
+    .chip .dot { width:8px; height:8px; border-radius:999px; background:#94a3b8; }
+    .chip.active { outline:2px solid var(--accent); }
+
+    /* Overview grid — six cards, dress-right-dress */
+    #overview { margin-top:10px; display:grid; grid-template-columns: repeat(2, 1fr); gap:10px; }
+    @media (min-width: 900px){ #overview { grid-template-columns: repeat(3, 1fr); } }
+    .ov-card { background:var(--cardbg); border:1px solid var(--cardbr); border-radius:14px; padding:12px; color:#d7e3f7; display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:76px; }
+    .ov-main { display:flex; gap:6px; }
+    .ov-name { font-weight:700; letter-spacing:.2px; }
+    .ov-line { font-size:13px; color:#b9c9e3; }
+    .ov-badges { display:flex; gap:6px; align-items:center; }
+    .badge { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--cardbr); background:#0b1529; color:#dfe9fb; padding:6px 10px; border-radius:999px; font-size:12px; min-height:var(--touch); }
+
+    /* Map + Aside */
+    #map { grid-area: map; height:100%; width:100%; }
+    aside { grid-area: aside; border-left:1px solid var(--line); overflow-y:auto; }
+    .panel { padding:12px; }
+    .section-title { font-size:12px; font-weight:700; text-transform:uppercase; color:#475569; letter-spacing:.5px; margin:10px 0 6px; }
+    .card { background:#ffffff; border:1px solid var(--line); border-radius:14px; padding:10px; box-shadow:0 1px 2px rgba(0,0,0,.04); }
+    .small { font-size:12px; color:#64748b; }
+
+    /* Bottom sheet forecast (mobile ergonomics) */
+    #sheet { position:fixed; left:0; right:0; bottom:0; transform:translateY(100%); transition:transform .25s ease; background:#ffffff; border-top-left-radius:16px; border-top-right-radius:16px; box-shadow:0 -8px 24px rgba(0,0,0,.2); max-height:70vh; display:flex; flex-direction:column; z-index:6; }
+    #sheet.open { transform:translateY(0); }
+    #sheet .handle { align-self:center; width:44px; height:5px; background:#cbd5e1; border-radius:999px; margin:8px 0; }
+    #sheet .head { padding:0 12px 6px; display:flex; align-items:center; justify-content:space-between; }
+    #sheet .body { overflow:auto; padding:0 12px 12px; }
+    .forecast-list { list-style:none; padding:0; margin:0; display:grid; gap:6px; }
+    .forecast-item { display:flex; align-items:center; justify-content:space-between; border:1px dashed var(--line); padding:6px 8px; border-radius:10px; font-size:13px; }
+
+    /* Floating refresh */
+    #fabRefresh { position:fixed; right:12px; bottom:12px; z-index:6; box-shadow:0 6px 18px rgba(0,0,0,.25); }
+
+    /* Mobile tweaks */
+    @media (max-width: 900px){
+      #app { grid-template-areas:
+        'header'
+        'toolbar'
+        'map'
+        'aside'; grid-template-columns:1fr; grid-template-rows:56px auto 44vh auto; }
+      aside { border-left:0; border-top:1px solid var(--line); }
+      .panel { padding:12px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <header>
+      <div class="title">🔥 Five Forks Fire Weather Dashboard</div>
+      <div class="actions">
+        <a id="firmsBtn" href="#" class="btn" title="Open FIRMS Map" target="_blank">🌎 FIRMS Map</a>
+        <a href="https://www.weather.gov/akq" class="btn" target="_blank" title="Open NWS AKQ">🛰️ NWS AKQ</a>
+      </div>
+    </header>
+
+    <!-- DATA-FIRST TOOLBAR: chips + overview ABOVE the map -->
+    <section id="toolbar">
+      <div id="chipRow" class="chip-row" aria-label="Counties"></div>
+      <div id="overview" aria-label="County overview"></div>
+    </section>
+
+    <div id="map"></div>
+
+    <aside>
+      <div class="panel">
+        <div class="section-title">⚠️ VA Alerts (NWS)</div>
+        <div id="alertsPanel" class="card"><div class="small">Loading active alerts…</div></div>
+        <div class="section-title">Layers</div>
+        <div id="quickLayers" class="card" style="display:flex;gap:8px;flex-wrap:wrap;"></div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Bottom sheet for forecast -->
+  <section id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <div class="handle"></div>
+    <div class="head">
+      <div>
+        <div id="sheetTitle" style="font-weight:700">Point Forecast</div>
+        <div id="sheetSub" class="small"></div>
+      </div>
+      <button id="sheetClose" class="btn" aria-label="Close forecast">✕</button>
+    </div>
+    <div class="body">
+      <ul id="sheetList" class="forecast-list"></ul>
+    </div>
+  </section>
+
+  <!-- Floating Refresh -->
+  <button id="fabRefresh" class="btn" title="Refresh data">🔄 Refresh</button>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // --- Map init ---
+    const CENTER = [36.95, -77.50];
+    const map = L.map('map').setView(CENTER, 10);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
+
+    // Header FIRMS button → FIRMS map viewer at current center/zoom
+    function openFirmsMap(){
+      const c = map.getCenter(); const z = map.getZoom();
+      const url = `https://firms.modaps.eosdis.nasa.gov/usfs/map/#d:today;l:fires_all,fire-perimeter,countries,earth;@${c.lng.toFixed(2)},${c.lat.toFixed(2)},${z.toFixed(2)}z`;
+      window.open(url, '_blank');
+    }
+    document.getElementById('firmsBtn').addEventListener('click', (e)=>{ e.preventDefault(); openFirmsMap(); });
+
+    // --- FIRMS layers (quick buttons) ---
+    const MAP_KEY = '01e7d5c7c7cd67df54a0e6f08c21e6ab';
+    const firmsBase = () => `https://firms.modaps.eosdis.nasa.gov/mapserver/wms/fires/${MAP_KEY}/?`;
+    const FIRMS = [
+      { id:'viirs24', name:'VIIRS 24h', params:{ layers:'fires_viirs_24', format:'image/png', transparent:true, version:'1.1.1' }},
+      { id:'modis24', name:'MODIS 24h', params:{ layers:'fires_modis_24', format:'image/png', transparent:true, version:'1.1.1' }},
+      { id:'tsd', name:'Time Since', params:{ layers:'tsd_4_viirs_all', format:'image/png', transparent:true, version:'1.1.1' }},
+    ];
+    const layers = new Map();
+    function addLayer(cfg){ return L.tileLayer.wms(firmsBase(), cfg.params); }
+    function buildQuickLayers(){
+      const bar = document.getElementById('quickLayers'); bar.innerHTML='';
+      FIRMS.forEach(cfg=>{
+        const b = document.createElement('button'); b.className='btn'; b.style.minHeight='36px'; b.textContent=cfg.name;
+        const lyr = addLayer(cfg); layers.set(cfg.id, lyr);
+        b.onclick = ()=>{ if(map.hasLayer(lyr)){ map.removeLayer(lyr); b.classList.remove('active'); } else { lyr.addTo(map); b.classList.add('active'); } };
+        bar.appendChild(b);
+        if(cfg.id==='viirs24'){ lyr.addTo(map); b.classList.add('active'); }
+      });
+    }
+    buildQuickLayers();
+
+    // --- Alerts ---
+    const alertsPanel = document.getElementById('alertsPanel');
+    let alertsLayer = L.geoJSON(null, { style: { color: '#ef4444', weight: 2, opacity: 0.9, fillOpacity: 0.08 } }).addTo(map);
+    async function loadVAAlerts(){
+      try{ alertsPanel.innerHTML='<div class="small">Fetching alerts…</div>';
+        const r = await fetch('https://api.weather.gov/alerts/active?area=VA'); const j = await r.json();
+        alertsLayer.clearLayers(); let count=0; (j.features||[]).forEach(f=>{ if(f.geometry){ alertsLayer.addData(f); count++; } });
+        alertsPanel.innerHTML = count? `<div class="small">Active alerts in VA: <strong>${count}</strong></div>` : '<div class="small">No active alerts.</div>';
+      }catch{ alertsPanel.innerHTML='<div class="small">Alerts unavailable.</div>'; }
+    }
+    loadVAAlerts();
+
+    // --- Data helpers ---
+    function localTime(iso){ return new Date(iso).toLocaleString([], { hour: 'numeric' }); }
+    async function getHourly(lat, lon){
+      const p = await fetch(`https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}`);
+      const pj = await p.json(); const hourly = pj?.properties?.forecastHourly;
+      if(!hourly) throw new Error('No hourly'); const h = await fetch(hourly); const hj = await h.json();
+      return (hj?.properties?.periods||[]);
+    }
+    async function countHot(lat, lon){
+      const d=0.25; const bbox = `${(lon-d).toFixed(3)},${(lat-d).toFixed(3)},${(lon+d).toFixed(3)},${(lat+d).toFixed(3)}`;
+      const url = `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${MAP_KEY}/VIIRS_SNPP_NRT,VIIRS_NOAA20_NRT/1/${bbox}`;
+      try{ const r = await fetch(url); if(!r.ok) throw 0; const t = await r.text(); const Ls = t.trim().split(/\r?\n/); return (Ls.length>1)?(Ls.length-1):0; }catch{ return null; }
+    }
+
+    // --- Counties ---
+    const COUNTY = [
+      { id:'amelia', name:'Amelia',       lat:37.34, lon:-77.98 },
+      { id:'nottoway', name:'Nottoway',   lat:37.14, lon:-78.05 },
+      { id:'dinwiddie', name:'Dinwiddie', lat:37.08, lon:-77.66 },
+      { id:'prgeorge', name:'Prince George', lat:37.20, lon:-77.22 },
+      { id:'brunswick', name:'Brunswick', lat:36.77, lon:-77.87 },
+      { id:'greensville', name:'Greensville', lat:36.68, lon:-77.56 }
+    ];
+
+    const chipRow = document.getElementById('chipRow');
+    const overview = document.getElementById('overview');
+    const countyData = new Map(); // id -> {temp, rh, wind, hotspots, periods}
+    let activeChip = null;
+
+    function updateChipAndCard(c){
+      const d = countyData.get(c.id); if(!d) return;
+      const met = document.getElementById(`met-${c.id}`);
+      if(met) met.textContent = `${d.temp} · RH ${d.rh}`;
+      const dot = document.querySelector(`#chip-${c.id} .dot`);
+      if(dot){ if(d.hotspots==null){ dot.style.background='#94a3b8'; dot.title='Hotspots n/a'; } else { dot.style.background = d.hotspots>0? '#ef4444' : '#22c55e'; dot.title = `Hotspots: ${d.hotspots}`; } }
+      // Card
+      const t = byId(`ov-t-${c.id}`), r = byId(`ov-r-${c.id}`), w = byId(`ov-w-${c.id}`), h = byId(`ov-hot-${c.id}`);
+      if(t) t.textContent = d.temp; if(r) r.textContent = d.rh; if(w) w.textContent = d.wind; if(h) h.textContent = (d.hotspots==null? 'n/a' : d.hotspots);
+    }
+
+    async function loadCounty(c){
+      try{
+        const [periods, hotspots] = await Promise.all([ getHourly(c.lat, c.lon), countHot(c.lat, c.lon) ]);
+        const now = periods[0] || {};
+        const data = {
+          periods,
+          temp: (now.temperature!=null? `${now.temperature}°${now.temperatureUnit}` : '–'),
+          rh: (now.relativeHumidity?.value!=null? `${Math.round(now.relativeHumidity.value)}%` : '–'),
+          wind: (now.windSpeed || '–'),
+          hotspots
+        };
+        countyData.set(c.id, data);
+      }catch{
+        const data = { periods:[], temp:'–', rh:'–', wind:'–', hotspots:null };
+        countyData.set(c.id, data);
+      }
+      updateChipAndCard(c);
+    }
+
+    function buildChips(){
+      chipRow.innerHTML='';
+      COUNTY.forEach(c=>{
+        const chip = document.createElement('button'); chip.className='chip'; chip.id = `chip-${c.id}`; chip.setAttribute('aria-pressed','false');
+        chip.innerHTML = `<span class="dot"></span><span class="name">${c.name}</span><span class="met" id="met-${c.id}">Loading…</span>`;
+        chip.onclick = ()=>selectCounty(c, chip);
+        chipRow.appendChild(chip);
+      });
+    }
+
+    function buildOverview(){
+      overview.innerHTML='';
+      COUNTY.forEach(c=>{
+        const card = document.createElement('div'); card.className='ov-card'; card.id = `ov-${c.id}`; card.setAttribute('role','button'); card.setAttribute('tabindex','0');
+        card.innerHTML = `
+          <div class="ov-main">
+            <div class="ov-name">${c.name}</div>
+            <div class="ov-line"><span id="ov-t-${c.id}">…</span> · RH <span id="ov-r-${c.id}">…</span> · <span id="ov-w-${c.id}">…</span></div>
+          </div>
+          <div class="ov-badges"><span class="badge">🔥 <span id="ov-hot-${c.id}">…</span></span></div>`;
+        card.addEventListener('click', ()=> openCountyForecast(c));
+        card.addEventListener('keypress', (e)=>{ if(e.key==='Enter' || e.key===' '){ e.preventDefault(); openCountyForecast(c); } });
+        overview.appendChild(card);
+      });
+    }
+
+    async function openCountyForecast(c){
+      map.setView([c.lat, c.lon], 10);
+      openSheet('Loading…', `${c.name}`);
+      try{
+        const d = countyData.get(c.id);
+        const periods = (d && d.periods && d.periods.length)? d.periods : await getHourly(c.lat, c.lon);
+        if(!d) countyData.set(c.id, { periods }); else d.periods = periods;
+        renderSheet(periods, `${c.name}`);
+      }catch{ openSheet('Forecast unavailable', `${c.name}`); }
+    }
+
+    async function selectCounty(c, chipEl){
+      if(activeChip) { activeChip.classList.remove('active'); activeChip.setAttribute('aria-pressed','false'); }
+      activeChip = chipEl; activeChip.classList.add('active'); activeChip.setAttribute('aria-pressed','true');
+      openCountyForecast(c);
+    }
+
+    function renderSheet(periods, title){
+      byId('sheetTitle').textContent = title || 'Point Forecast';
+      byId('sheetSub').textContent = '';
+      const list = byId('sheetList');
+      list.innerHTML = (periods||[]).slice(0, 12).map(p=>`<li class="forecast-item"><span>${localTime(p.startTime)}</span><span>${p.temperature}°${p.temperatureUnit}</span><span>RH ${p.relativeHumidity?.value??'–'}%</span><span>${p.windSpeed}</span></li>`).join('');
+      sheet.classList.add('open');
+    }
+
+    const sheet = byId('sheet');
+    byId('sheetClose').onclick = ()=> sheet.classList.remove('open');
+
+    // Map click also opens sheet for that point
+    map.on('click', async (e)=>{
+      openSheet('Loading…','Map Point');
+      try{ const periods = await getHourly(e.latlng.lat, e.latlng.lng); renderSheet(periods,'Map Point'); }catch{ openSheet('Forecast unavailable','Map Point'); }
+    });
+
+    // Build UI + load data
+    buildChips();
+    buildOverview();
+    COUNTY.forEach(c=> loadCounty(c));
+
+    // Refresh
+    function refreshAll(){ loadVAAlerts(); COUNTY.forEach(c=> loadCounty(c)); const z=map.getZoom(); map.setZoom(z); }
+    byId('fabRefresh').onclick = refreshAll;
+
+    // Visual focus bounds (cue)
+    const focusBounds = L.latLngBounds([[36.6, -78.0], [37.5, -77.0]]);
+    L.rectangle(focusBounds, { color:'#0ea5e9', weight:1, fillOpacity:0.03 }).addTo(map);
+
+    // tiny helpers
+    function byId(id){ return document.getElementById(id); }
+    function openSheet(text, title){ byId('sheetTitle').textContent = title||'Point Forecast'; byId('sheetSub').textContent=''; const list=byId('sheetList'); list.innerHTML=`<li class=\"forecast-item\"><span class=\"small\">${text}</span></li>`; sheet.classList.add('open'); }
+  </script>
+</body>
+</html>
