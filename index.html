@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Five Forks Fire Weather Dashboard</title>
+
+<!--
+  Updated to replace the old FIRMS fire map with AirNow’s Fire & Smoke Map.
+  The old FIRMS buttons, quick links, and CSV-based hotspot logic have been
+  removed. A new button now links directly to the AirNow mobile fire map.
+-->
+
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><text y=%2214%22 font-size=%2214%22>🔥</text></svg>">
+
+<style>
+  :root{
+    --bg:#0f172a; --panel:#0b1224; --card:#101a30; --line:#22314a;
+    --fg:#e2e8f0; --muted:#9fb6d9; --accent:#0ea5e9;
+  }
+  html,body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+  a{color:inherit}
+  header{display:flex;justify-content:space-between;align-items:center;padding:12px;border-bottom:1px solid var(--line)}
+  header .title{font-weight:800}
+  .btn{display:inline-flex;gap:6px;align-items:center;background:#1f2937;border:1px solid #2a3a56;color:#e5e7eb;border-radius:12px;padding:10px 12px;text-decoration:none;font-size:14px}
+  .btn:hover{filter:brightness(1.08)}
+  .wrap{max-width:1100px;margin:0 auto;padding:12px}
+  .grid{display:grid;gap:10px}
+  .cards{grid-template-columns:1fr}
+  @media(min-width:720px){.cards{grid-template-columns:repeat(2,1fr)}}
+  @media(min-width:1000px){.cards{grid-template-columns:repeat(3,1fr)}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px}
+  .county{display:flex;justify-content:space-between;align-items:flex-start}
+  .c-name{font-weight:800;margin-bottom:4px}
+  .c-line{color:#c9d6f5;font-size:14px}
+  .pill{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:#0b1529;border-radius:999px;padding:6px 10px;font-size:12px}
+  .section{margin-top:14px}
+  .title-sm{font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:#7f8db0;margin:6px 0}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px}
+  .muted{color:var(--muted)}
+  .row-btns{display:flex;flex-wrap:wrap;gap:8px}
+  .status{font-size:12px;color:#9fb6d9;margin-top:6px}
+  .badge-warn{background:#2a190b;border-color:#4d2b14}
+  .badge-ok{background:#0b2a13;border-color:#144d25}
+  footer{padding:16px 12px;color:#90a4c8;font-size:12px;text-align:center}
+</style>
+</head>
+<body>
+  <header class="wrap">
+    <div class="title">🔥 Five Forks Fire Weather Dashboard</div>
+    <div class="row-btns">
+      <!-- Updated button: opens AirNow Fire & Smoke Map for our region -->
+      <a id="airnowBtn" class="btn" href="https://mobilefire.airnow.gov/#5.5/37.638/-81.627?api_key=961AB5ED-B1D6-4B5E-8D34-8C097E374925" target="_blank">🌎 AirNow Map</a>
+      <a class="btn" href="https://www.weather.gov/akq" target="_blank">🛰️ NWS AKQ</a>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <!-- County cards -->
+    <section class="grid cards" id="cards"></section>
+
+    <!-- Local rule -->
+    <section class="section">
+      <div class="title-sm">🔥 Local Fire Weather (30/30/30)</div>
+      <div id="ruleCard" class="panel muted">
+        Checking local conditions…
+      </div>
+    </section>
+
+    <!-- Alerts -->
+    <section class="section">
+      <div class="title-sm">⚠️ VA Alerts (NWS)</div>
+      <div id="alertsPanel" class="panel muted">Loading active alerts…</div>
+    </section>
+  </main>
+
+  <footer>
+    Fire &amp; Smoke map courtesy of AirNow.
+  </footer>
+
+<script>
+/* ---------- Config ---------- */
+/*
+  Constants for county locations. These values are unchanged from the original
+  dashboard. We still compute local forecast conditions and alert status.
+*/
+const COUNTIES = [
+  { id:'amelia',     name:'Amelia',        lat:37.34, lon:-77.98 },
+  { id:'nottoway',   name:'Nottoway',      lat:37.14, lon:-78.05 },
+  { id:'dinwiddie',  name:'Dinwiddie',     lat:37.08, lon:-77.66 },
+  { id:'prgeorge',   name:'Prince George', lat:37.20, lon:-77.22 },
+  { id:'brunswick',  name:'Brunswick',     lat:36.77, lon:-77.87 },
+  { id:'greensville',name:'Greensville',   lat:36.68, lon:-77.56 }
+];
+
+/* ---------- DOM helpers ---------- */
+const $ = (id)=>document.getElementById(id);
+
+/* ---------- Build UI ---------- */
+const cards = $('cards');
+function buildCards(){
+  cards.innerHTML = '';
+  COUNTIES.forEach(c=>{
+    const el = document.createElement('div');
+    el.className = 'card';
+    el.id = `card-${c.id}`;
+    el.innerHTML = `
+      <div class="county">
+        <div>
+          <div class="c-name">${c.name}</div>
+          <div class="c-line"><span id="t-${c.id}">…</span> · RH <span id="rh-${c.id}">…</span> · <span id="w-${c.id}">…</span></div>
+        </div>
+        <!-- Hotspots indicator removed: the AirNow map displays current incidents and smoke plumes directly. -->
+      </div>`;
+    cards.appendChild(el);
+  });
+}
+buildCards();
+
+/* ---------- Simple utils ---------- */
+function mphFrom(text){ if(!text) return 0; const ns=(text.match(/\d+(\.\d+)?/g)||[]).map(Number); return ns.length?Math.max(...ns):0; }
+
+/* ---------- 30/30/30 ---------- */
+function met303030(p){ const t=p?.temperature; const rh=Math.round(p?.relativeHumidity?.value ?? NaN); const w=mphFrom(p?.windSpeed||''); return (t!=null && t>=86) && (Number.isFinite(rh) && rh<=30) && (w>=18.6); }
+function renderRule(){
+  const hits=[];
+  COUNTIES.forEach(c=>{ const p = countyData.get(c.id)?.periods?.[0]; if(p && met303030(p)) hits.push(c.name); });
+  const expl = `Temperature is 86F (30C) or above, relative humidity is 30% or less, wind speed is 18.6 mph (30 km/h) or stronger — conditions met for extreme fire behavior and difficult to control.`;
+  const box = $('ruleCard');
+  if(hits.length){
+    box.className = 'panel badge-warn';
+    box.innerHTML = `<strong>30/30/30 met:</strong> ${hits.join(', ')}<br><span class="muted">${expl}</span>`;
+  }else{
+    box.className = 'panel badge-ok';
+    box.innerHTML = `<strong>30/30/30:</strong> not currently met<br><span class="muted">${expl}</span>`;
+  }
+}
+
+/* ---------- Forecast (NWS) ---------- */
+const TTL_MS = 15*60*1000;
+const FCACHE_KEY='ffwd_forecast_cache_v2';
+let fcache={}; try{ const raw=localStorage.getItem(FCACHE_KEY); if(raw) fcache=JSON.parse(raw)||{}; }catch{}
+const ck=(lat,lon)=>`${lat.toFixed(3)},${lon.toFixed(3)}`;
+function saveF(){ try{ localStorage.setItem(FCACHE_KEY,JSON.stringify(fcache)); }catch{} }
+
+async function getHourly(lat,lon,{force=false}={}){
+  const key=ck(lat,lon), now=Date.now();
+  if(!force){ const e=fcache[key]; if(e && e.periods?.length && (now-e.ts)<TTL_MS) return e.periods; }
+  const p=await fetch(`https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}`); const pj=await p.json();
+  const hourly=pj?.properties?.forecastHourly; if(!hourly) return [];
+  const h=await fetch(hourly); const hj=await h.json();
+  const periods = hj?.properties?.periods || [];
+  fcache[key]={ts:Date.now(),periods}; saveF(); return periods;
+}
+
+/* ---------- Alerts ---------- */
+const alertsPanel=$('alertsPanel');
+async function loadVAAlerts(){
+  try{
+    alertsPanel.textContent='Fetching alerts…';
+    const r=await fetch('https://api.weather.gov/alerts/active?area=VA',{headers:{Accept:'application/geo+json'}});
+    const j=await r.json();
+    const feats = j?.features||[];
+    if(!feats.length){ alertsPanel.textContent='No active alerts.'; return; }
+    const list = feats.map(f=>f?.properties?.event).filter(Boolean);
+    alertsPanel.innerHTML = `<div><strong>${list.length}</strong> active alert(s)</div><div class="muted">${list.slice(0,5).join(' • ')}</div>`;
+  }catch{ alertsPanel.textContent='Alerts unavailable.'; }
+}
+
+/* ---------- Data load & render ---------- */
+const countyData = new Map();
+
+async function loadCounty(c, force=false){
+  try{
+    const periods = await getHourly(c.lat,c.lon,{force});
+    const now = periods[0] || {};
+    countyData.set(c.id,{
+      periods,
+      t: (now.temperature!=null? `${now.temperature}°${now.temperatureUnit}`:'–'),
+      rh: (now.relativeHumidity?.value!=null? `${Math.round(now.relativeHumidity.value)}%`:'–'),
+      w: (now.windSpeed||'–')
+    });
+  }catch{
+    countyData.set(c.id,{periods:[],t:'–',rh:'–',w:'–'});
+  }
+  $(`t-${c.id}`).textContent = countyData.get(c.id).t;
+  $(`rh-${c.id}`).textContent = countyData.get(c.id).rh;
+  $(`w-${c.id}`).textContent = countyData.get(c.id).w;
+}
+
+/* ---------- Boot ---------- */
+(async function boot(){
+  await Promise.all(COUNTIES.map(c=>loadCounty(c,false)));
+  renderRule();
+  loadVAAlerts();
+})();
+</script>
+</body>
+</html>
