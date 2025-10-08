@@ -1,0 +1,42 @@
+name: Fire Agent
+
+on:
+  schedule: [{ cron: "*/30 * * * *" }]
+  workflow_dispatch:
+  repository_dispatch: { types: [fire-agent-run] }
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Install deps
+        run: |
+          python -m pip install -U pip
+          pip install requests pytz python-dateutil
+      - name: Build data
+        env:
+          AMBEE_API_KEY: ${{ secrets.AMBEE_API_KEY }}
+          KBDI_JSON: ${{ secrets.KBDI_JSON }}
+        run: python scripts/build_data.py
+      - name: Publish for Pages (fast inline paint)
+        run: |
+          mkdir -p docs
+          jq -c . data/today.json > docs/fire_data.min.json
+          cp docs/fire_data.min.json docs/fire_data.json
+          echo "window.__FIRE_DATA__ = $(cat docs/fire_data.min.json);" > docs/_inline_fire_data.js
+          HASH=$(sha1sum docs/fire_data.min.json | cut -c1-10)
+          cp docs/fire_data.min.json docs/fire_data.$HASH.json
+          echo "$HASH" > docs/fire_data.hash
+      - name: Commit results
+        run: |
+          git config user.name  "fire-agent"
+          git config user.email "fire-agent@users.noreply.github.com"
+          git add data/ docs/fire_data.json docs/_inline_fire_data.js docs/fire_data.min.json docs/fire_data.hash
+          git commit -m "agent: refresh data" || echo "no changes"
+          git push
